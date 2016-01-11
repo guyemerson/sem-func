@@ -120,3 +120,4 @@ with open('../data/toy.pkl','wb') as f:
     pickle.dump((intr_dmrs, tran_dmrs, ditr_dmrs), f) 
 
 # Would like (person feed mouse rice) => (mouse eat rice)
+# Also (X buy from Y) => (Y sell to X)

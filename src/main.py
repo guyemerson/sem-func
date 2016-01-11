@@ -365,3 +365,15 @@ if __name__ == "__main__":
     
     # At the moment, everything that's "not useful" for a pred becomes a negative weight
     # Instead, perhaps only allow positive weights, and introduce a negative bias?
+    
+    # Try with more data?
+    
+    # Cheat the weights?
+    
+    # !!!
+    # Training is optimising the situation RBM at the expense of the predicates
+    # If all the features are nouny or verby, then we've collapsed the space to two states
+    # This means we can predict the entity vectors extremely well (even if we can't predict the preds) 
+    
+    # Try training on preds more than on links?
+    # Try contrastive divergence instead of fantasy particles? 
