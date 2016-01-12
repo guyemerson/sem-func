@@ -13,11 +13,14 @@ from model import SemFuncModel
 if __name__ == "__main__":
     
     # Positive graphs
-    
+    """
     with open('../data/toy.pkl', 'rb') as f:
         intr_dmrs, tran_dmrs, ditr_dmrs = pickle.load(f)
     dmrs = intr_dmrs + tran_dmrs + ditr_dmrs
     freq = [len(intr_dmrs), len(tran_dmrs), len(ditr_dmrs)]
+    """
+    with open('../data/tinytoy.pkl', 'rb') as f:
+        dmrs = pickle.load(f)
     
     # Negative graphs
     
@@ -27,7 +30,8 @@ if __name__ == "__main__":
         links = [Link(i, i+j+1, j, None) for j in range(num)]
         return Dmrs(nodes, links)
     
-    neg_freq = [2,10,2]
+    #neg_freq = [2,10,2]
+    neg_freq = [3,0,0]
     
     neg_dmrs = []
     i = 0
@@ -39,39 +43,61 @@ if __name__ == "__main__":
     # Set up model
     
     model = SemFuncModel(dmrs, neg_dmrs,
-                         dims = 25,
+                         dims = 20,
                          rate_link = 10**-5,
                          rate_pred = 10**-3,
                          l2_link = 1-10**-5,
                          l2_pred = 1-10**-4,
                          l1_link = 10**-7,
                          l1_pred = 10**-6,
-                         init_range = 0)
-    # Cheat weights
+                         init_range = 0,
+                         print_every = 100,
+                         minibatch = 10)
+    
+    model.train(500000)
+    #model.train_alternate(5000)
+    
+    # Even with 100 times the pred rate,
+    # which leads to ~50 times larger weights,
+    # the model collapses to two points...
+    
+    """
+    # Cheating:
+    # If we assign one dimension to each pred,
+    # choose all the weights and initialise the latent vectors accordingly,
+    # then this is stable
+    # Note that the pred weights must be stronger (more than 3 times, for ditransitives)
+    # The fantasy particles end up having all 0s for verbs and random vectors for nouns
+    a = 5
+    b = 20
+    model.link_wei -= a
+    model.pred_wei -= b
     import toy
     for i in range(model.V):
-        model.pred_wei[i,i] = 10
+        model.pred_wei[i,i] = b
     for i, row in enumerate(toy.intr_sent):
         for j, value in enumerate(row):
             if value:
-                model.link_wei[0, toy.I+i, j] = 10
+                model.link_wei[0, toy.I+i, j] = a
     for i, mat in enumerate(toy.tran_sent):
         for j, row in enumerate(mat):
             for k, value in enumerate(row):
                 if value:
-                    model.link_wei[0, toy.T+i, j] = 10
-                    model.link_wei[1, toy.T+i, k] = 10
+                    model.link_wei[0, toy.T+i, j] = a
+                    model.link_wei[1, toy.T+i, k] = a
     for i, ten in enumerate(toy.ditr_sent):
         for j, mat in enumerate(ten):
             for k, row in enumerate(mat):
                 for l, value in enumerate(row):
                     if value:
-                        model.link_wei[0, toy.D+i, j] = 10
-                        model.link_wei[1, toy.D+i, k] = 10
-                        model.link_wei[2, toy.D+i, l] = 10
-    
-    # Even with the pred rate 100 times higher than the link weight,
-    # this still seems to want to converge nouns and verbs to single points
+                        model.link_wei[0, toy.D+i, j] = a
+                        model.link_wei[1, toy.D+i, k] = a
+                        model.link_wei[2, toy.D+i, l] = a
+    model.ents = zeros((model.N, model.D))
+    for i in range(model.N):
+        p = model.nodes[i].pred
+        model.ents[i,p] = 1
+    """
     
     
     """
@@ -128,10 +154,6 @@ if __name__ == "__main__":
     # Use higher negative sampling instead of L2 regularisation?
     # -> this seems to make all the weights negative... 
     # (Regularising common preds more is a good idea, right?
-        
-    
-    model.train(5000)
-    #model.train_alternate(5000)
     
     
     # Perhaps the space is too crowded...
@@ -157,4 +179,7 @@ if __name__ == "__main__":
     # This means we can predict the entity vectors extremely well (even if we can't predict the preds) 
     
     # Try training on preds more than on links?
-    # Try contrastive divergence instead of fantasy particles? 
+    # Try contrastive divergence instead of fantasy particles?
+    
+    # Currently, preds are trained discriminatively and links generatively
+    # Use another set of weights for generation, and introduce a term for KL divergence or whatever? (cf Eng talk)

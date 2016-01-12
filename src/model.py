@@ -1,10 +1,10 @@
-from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign, minimum
+from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign, minimum, amax
 from scipy.special import expit
 from scipy.spatial.distance import cosine
 import pickle
 
 class SemFuncModel():
-    def __init__(self, corpus, neg_graphs, dims, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range):
+    def __init__(self, corpus, neg_graphs, dims, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range, minibatch, print_every):
         """
         Corpus and neg_graphs should each have distinct nodeids for all nodes
         """
@@ -15,6 +15,9 @@ class SemFuncModel():
         self.L2_pred = l2_pred
         self.L1_link = l1_link
         self.L1_pred = l1_pred
+        self.minibatch = minibatch
+        # Print options
+        self.print_every = print_every
         # Indices mapping to node tokens, predicate types, and link types
         self.graphs = dict(enumerate(corpus))
         self.nodes = {n.nodeid:n for x in corpus for n in x.iter_nodes()}
@@ -42,12 +45,13 @@ class SemFuncModel():
     
     # Training functions
     
-    def resample(self, nodes, ents, pred=True):
+    def resample(self, nodes, ents, pred=True, check=False):
         for n in nodes:
             if pred:
                 negenergy = array(self.pred_wei[n.pred, :], copy=True)
             else:
                 negenergy = zeros(self.D)
+
             for link in n.outgoing:
                 negenergy += tensordot(self.link_wei[link.rargname, :, :],
                                        ents[link.end, :],
@@ -65,7 +69,7 @@ class SemFuncModel():
         self.resample(self.nodes.values(), self.ents)
     
     def sample_latent_batch(self, nodes):
-        self.resample(nodes, self.ents)
+        self.resample(nodes, self.ents, check=True)
     
     def sample_particle(self):
         self.resample(self.neg_nodes.values(), self.neg_ents, pred=False)
@@ -123,7 +127,11 @@ class SemFuncModel():
         self.link_wei += self.rate_link * link_del
         self.pred_wei += self.rate_pred * pred_del
     
-    def train(self, epochs, minibatch=10, print_every=10):
+    def train(self, epochs, minibatch=None, print_every=None):
+        if minibatch == None:
+            minibatch = self.minibatch
+        if print_every == None:
+            print_every = self.print_every
         G = len(self.graphs)
         indices = arange(G)
         for e in range(epochs):
@@ -156,10 +164,17 @@ class SemFuncModel():
             if e % print_every == 0:
                 print(self.link_wei)
                 print(self.pred_wei)
+                print(amax(absolute(self.link_wei)))
+                print(amax(absolute(self.pred_wei)))
+                print(self.average_energy())
                 with open('../data/out.pkl','wb') as f:
                     pickle.dump(self, f)
         
-    def train_alternate(self, epochs, minibatch=10, print_every=3, streak=3):
+    def train_alternate(self, epochs, minibatch=None, print_every=None, streak=3):
+        if minibatch == None:
+            minibatch = self.minibatch
+        if print_every == None:
+            print_every = self.print_every
         G = len(self.graphs)
         indices = arange(G)
         for e in range(epochs):
@@ -222,13 +237,19 @@ class SemFuncModel():
                                self.pred_wei[n.pred, :], (0,0))
         return e
     
+    def average_energy(self):
+        e = 0
+        for g in self.graphs.values():
+            e += self.energy(g, self.ents)
+        return e / len(self.graphs)
+    
     def sample_energy(self, graph, samples=5, burnin=5, interval=2, pred=True):
         e = 0
         raw_ents = random.binomial(1, 0.5, (len(graph), self.D))
         index = {n.nodeid:i for i,n in enumerate(graph.iter_nodes())}
         ents = WrappedVectors(raw_ents, index)
         for i in range(-burnin, 1+(samples-1)*interval):
-            self.resample(graph.iter_nodes, ents, pred=pred)
+            self.resample(graph.iter_nodes(), ents, pred=pred)
             if i >= 0 and i % interval == 0:
                 e -= self.energy(graph, ents, pred=pred)
         return e/samples
@@ -240,8 +261,8 @@ class SemFuncModel():
     def cosine_samples(self, pred1, pred2, samples=5):
         total = 0
         for _ in range(samples):
-            ent1 = random.binomial(1, self.pred_wei[pred1, :])
-            ent2 = random.binomial(1, self.pred_wei[pred2, :])
+            ent1 = random.binomial(1, expit(self.pred_wei[pred1, :]))
+            ent2 = random.binomial(1, expit(self.pred_wei[pred2, :]))
             total += cosine(ent1, ent2)
         return total/samples 
     
