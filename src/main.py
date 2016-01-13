@@ -44,22 +44,29 @@ if __name__ == "__main__":
     
     model = SemFuncModel(dmrs, neg_dmrs,
                          dims = 20,
+                         card = 2,
                          rate_link = 10**-5,
                          rate_pred = 10**-3,
-                         l2_link = 1-10**-5,
-                         l2_pred = 1-10**-4,
-                         l1_link = 10**-7,
-                         l1_pred = 10**-6,
+                         l2_link = 1-10**-6,
+                         l2_pred = 1-10**-5,
+                         l1_link = 10**-9,
+                         l1_pred = 10**-8,
                          init_range = 0,
                          print_every = 100,
                          minibatch = 10)
     
-    model.train(500000)
+    model.train(50000)
     #model.train_alternate(5000)
     
     # Even with 100 times the pred rate,
     # which leads to ~50 times larger weights,
     # the model collapses to two points...
+    
+    # To see if the model is training:
+    # links: entropy of each latent variable
+    # preds: discriminative accuracy
+    
+    # Occasionally restart particles?
     
     """
     # Cheating:

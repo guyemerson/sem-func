@@ -7,6 +7,9 @@ from model import SemFuncModel
 with open('../data/out.pkl', 'rb') as f:
     m = pickle.load(f)
 
+print(m.link_wei)
+print(m.pred_wei)
+
 cos = zeros((m.V, m.V))
 
 for i in range(m.V):

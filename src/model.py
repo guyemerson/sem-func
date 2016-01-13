@@ -1,10 +1,10 @@
-from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign, minimum, amax
+from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign, minimum, amax, convolve
 from scipy.special import expit
 from scipy.spatial.distance import cosine
 import pickle
 
 class SemFuncModel():
-    def __init__(self, corpus, neg_graphs, dims, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range, minibatch, print_every):
+    def __init__(self, corpus, neg_graphs, dims, card, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range, minibatch, print_every):
         """
         Corpus and neg_graphs should each have distinct nodeids for all nodes
         """
@@ -27,9 +27,11 @@ class SemFuncModel():
         self.V = 1 + max(n.pred for n in self.nodes.values())
         self.L = 1 + max(x.rargname for n in self.nodes.values() for x in n.outgoing)
         # Latent entities, link weights, and pred weights
-        self.ents = random.binomial(1, 0.5, (self.N, self.D))
-        self.link_wei = random.uniform(-init_range, init_range, (self.L, self.D, self.D)) # link, from, to
-        self.pred_wei = random.uniform(-init_range, init_range, (self.V, self.D))
+        self.C = card
+        self.Crange = arange(card+1)
+        self.ents = random.binomial(1, card/dims, (self.N, self.D)) # approximate sparsity
+        self.link_wei = random.uniform(0, init_range, (self.L, self.D, self.D)) # link, from, to
+        self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
         self.link_sumsq = zeros((self.L, self.D, self.D))
         self.pred_sumsq = zeros((self.V, self.D))
         # Particles for negative samples
@@ -45,8 +47,9 @@ class SemFuncModel():
     
     # Training functions
     
-    def resample(self, nodes, ents, pred=True, check=False):
+    def resample(self, nodes, ents, pred=True):
         for n in nodes:
+            # Find the negative energy for each dimension
             if pred:
                 negenergy = array(self.pred_wei[n.pred, :], copy=True)
             else:
@@ -60,16 +63,47 @@ class SemFuncModel():
                 negenergy += tensordot(self.link_wei[link.rargname, :, :],
                                        ents[link.start, :],
                                        (0,0))
-            prob = expit(negenergy)
-            # Warning!
-            # If the negenergy is above 710, expit returns nan
-            ents[n.nodeid, :] = random.binomial(1, prob)
+            # Expit gives the probability without controlling sparsity
+            prob = expit(negenergy) # Warning! If the negenergy is above 710, expit returns nan
+            minp = 1 - prob
+            # Pass messages up
+            intermed = [array([minp[0], prob[0]])]
+            for i in range(1,self.D):
+                message = convolve(intermed[-1], [minp[i], prob[i]])[:self.C+1]
+                intermed.append(message)
+            # Sample total
+            probtotal = intermed[-1]
+            probtotal /= sum(probtotal)
+            #print(probtotal)
+            aux = random.choice(self.Crange, p=probtotal)
+            #print(aux)
+            # Iteratively sample
+            nid = n.nodeid
+            for i in range(self.D-1, 0, -1):
+                # aux holds the total number of 1s remaining
+                if aux == i+1:
+                    for j in range(i+1):
+                        ents[nid, j] = 1
+                    break
+                elif aux > 0:
+                    #print(intermed[i-1])
+                    ein = prob[i] * intermed[i-1][aux-1]
+                    aus = minp[i] * intermed[i-1][aux]
+                    on = ein/(ein+aus)
+                    new = random.binomial(1, on)
+                    #print(new)
+                    ents[nid, i] = new
+                    aux -= new
+                else:
+                    ents[nid, i] = 0
+            ents[nid, 0] = aux
+            #print(ents[nid])
     
     def sample_latent(self):
         self.resample(self.nodes.values(), self.ents)
     
     def sample_latent_batch(self, nodes):
-        self.resample(nodes, self.ents, check=True)
+        self.resample(nodes, self.ents)
     
     def sample_particle(self):
         self.resample(self.neg_nodes.values(), self.neg_ents, pred=False)
@@ -126,6 +160,7 @@ class SemFuncModel():
         self.pred_wei *= self.L2_pred
         self.link_wei += self.rate_link * link_del
         self.pred_wei += self.rate_pred * pred_del
+        
     
     def train(self, epochs, minibatch=None, print_every=None):
         if minibatch == None:
@@ -153,6 +188,9 @@ class SemFuncModel():
                 # Descend
                 self.link_wei += self.rate_link * link_del
                 self.pred_wei += self.rate_pred * pred_del
+                # Remove negatives
+                self.link_wei = self.link_wei.clip(0)
+                self.pred_wei = self.pred_wei.clip(0)
                 #print(average(absolute(self.pred_wei)), average(absolute(self.rate*pred_del)))
                 # Regularise
                 self.link_wei *= self.L2_link
