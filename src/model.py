@@ -2,6 +2,7 @@ from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign
 from scipy.special import expit
 from scipy.spatial.distance import cosine
 import pickle
+from dmrs.core import PointerNode, DictPointDmrs
 
 class SemFuncModel():
     def __init__(self, corpus, neg_graphs, dims, card, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range, minibatch, print_every):
@@ -298,17 +299,20 @@ class SemFuncModel():
     
     def cosine_samples(self, pred1, pred2, samples=5):
         total = 0
+        ents = zeros((2, self.D))
+        nodes = [PointerNode(0, pred1), PointerNode(1, pred2)]
         for _ in range(samples):
-            ent1 = random.binomial(1, expit(self.pred_wei[pred1, :]))
-            ent2 = random.binomial(1, expit(self.pred_wei[pred2, :]))
-            total += cosine(ent1, ent2)
+            self.resample(nodes, ents)
+            total += cosine(ents[0,:], ents[1,:])
         return total/samples 
     
     def implies(self, pred1, pred2, samples=5):
         total = 0
+        ents = zeros((1, self.D))
+        nodes = [PointerNode(0, pred1)]
         for _ in range(samples):
-            ent = random.binomial(1, self.pred_wei[pred1, :])
-            total += self.prob(ent, pred2)
+            self.resample(nodes, ents)
+            total += self.prob(ents[0,:], pred2)
         return total/samples
     
     def prob(self, ent, pred):

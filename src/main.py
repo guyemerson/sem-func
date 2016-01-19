@@ -13,7 +13,7 @@ from model import SemFuncModel
 if __name__ == "__main__":
     
     # Positive graphs
-    """
+    
     with open('../data/toy.pkl', 'rb') as f:
         intr_dmrs, tran_dmrs, ditr_dmrs = pickle.load(f)
     dmrs = intr_dmrs + tran_dmrs + ditr_dmrs
@@ -21,6 +21,7 @@ if __name__ == "__main__":
     """
     with open('../data/tinytoy.pkl', 'rb') as f:
         dmrs = pickle.load(f)
+    """
     
     # Negative graphs
     
@@ -30,8 +31,8 @@ if __name__ == "__main__":
         links = [Link(i, i+j+1, j, None) for j in range(num)]
         return Dmrs(nodes, links)
     
-    #neg_freq = [2,10,2]
-    neg_freq = [3,0,0]
+    neg_freq = [2,10,2]
+    #neg_freq = [3,0,0]
     
     neg_dmrs = []
     i = 0
@@ -44,13 +45,13 @@ if __name__ == "__main__":
     
     model = SemFuncModel(dmrs, neg_dmrs,
                          dims = 20,
-                         card = 2,
-                         rate_link = 10**-5,
-                         rate_pred = 10**-3,
-                         l2_link = 1-10**-6,
-                         l2_pred = 1-10**-5,
-                         l1_link = 10**-9,
-                         l1_pred = 10**-8,
+                         card = 3,
+                         rate_link = 1*10**-2,
+                         rate_pred = 2*10**-2,
+                         l2_link = 1-3*10**-3,
+                         l2_pred = 1-3*10**-3,
+                         l1_link = 10**-7,
+                         l1_pred = 10**-7,
                          init_range = 0,
                          print_every = 100,
                          minibatch = 10)
@@ -190,3 +191,14 @@ if __name__ == "__main__":
     
     # Currently, preds are trained discriminatively and links generatively
     # Use another set of weights for generation, and introduce a term for KL divergence or whatever? (cf Eng talk)
+    
+    
+    
+    # Now that it's working, somewhat,
+    # introduce an upper limit on weights? Increase regularisation?
+    # optimise sampling...
+    
+    # There are two things to tune:
+    # Strength of regularisation (relative to learning rate) - determines value of final weights
+    # Link-pred ratio in learning rates - determines how much we value each
+    # For toy model: slightly increase reg strength, and shift balance to preds 
