@@ -69,15 +69,17 @@ class SemFuncModel():
             minp = 1 - prob
             # Pass messages up
             intermed = [array([minp[0], prob[0]])]
-            for i in range(1,self.D):
+            for i in range(1,self.D-1):
                 message = convolve(intermed[-1], [minp[i], prob[i]])[:self.C+1]
                 intermed.append(message)
             # Sample total
-            probtotal = intermed[-1]
-            probtotal /= sum(probtotal)
+            #probtotal = intermed[-1]
+            #probtotal /= sum(probtotal)
             #print(probtotal)
-            aux = random.choice(self.Crange, p=probtotal)
+            #aux = random.choice(self.Crange, p=probtotal)
             #print(aux)
+            # Fix total
+            aux = self.C
             # Iteratively sample
             nid = n.nodeid
             for i in range(self.D-1, 0, -1):
