@@ -1,5 +1,5 @@
-import os, gzip, pickle
-from dmrs.core import DictPointDmrs as Dmrs, RealPred, GPred
+import sys, os, gzip, pickle
+from dmrs.core import ListDmrs as Dmrs, RealPred, GPred
 
 def extract(xmlstring, sits):
     """Extract situations from a DMRS in XML form"""
@@ -11,7 +11,7 @@ def extract(xmlstring, sits):
             output = [n.pred, None, None]
             for i in (1,2):
                 try:  # See if the argument is there
-                    arglink = n.get_out('ARG'+str(i)).pop()
+                    arglink = dmrs.get_out(n.nodeid, 'ARG'+str(i)).pop()
                 except KeyError:
                     continue
                 # Get the node and the pred
@@ -51,25 +51,35 @@ TARGET = '/anfs/bigdisc/gete2/wikiwoods/core'
 
 # Process each file in SOURCE
 for filename in sorted(os.listdir(SOURCE)):
-    with gzip.open(os.path.join(SOURCE, filename),'rb') as f:
-        print(filename)
-        # List of situation triples
-        situations = []
-        # Each xml will span multiple lines,
-        # separated by an empty line
-        f.readline() # The first line is blank, for some reason
-        xml = b''
-        for line in f:
-            # Keep adding new lines until we get a blank line
-            if line != b'\n':
-                xml += line
-            else:  # Once we've found a blank line, extract the DMRS
-                extract(xml, situations)
-                xml = b''
-        # If the file does not end with a blank line:
-        if xml != b'':
-            extract(xml, situations)
-    # Save the triples in TARGET
     newname = os.path.splitext(filename)[0]+'.pkl'
-    with open(os.path.join(TARGET, newname), 'wb') as f:
-        pickle.dump(situations, f)
+    if os.path.exists(os.path.join(TARGET, newname)):
+        print('skipping '+filename)
+        continue
+    try:
+        with gzip.open(os.path.join(SOURCE, filename),'rb') as f:
+            print(filename)
+            # List of situation triples
+            situations = []
+            # Each xml will span multiple lines,
+            # separated by an empty line
+            f.readline() # The first line is blank, for some reason
+            xml = b''
+            for line in f:
+                # Keep adding new lines until we get a blank line
+                if line != b'\n':
+                    xml += line
+                else:  # Once we've found a blank line, extract the DMRS
+                    extract(xml, situations)
+                    xml = b''
+            # If the file does not end with a blank line:
+            if xml != b'':
+                extract(xml, situations)
+        # Save the triples in TARGET
+        with open(os.path.join(TARGET, newname), 'wb') as f:
+            pickle.dump(situations, f)
+    except:
+        print("Error!")
+        with open('wikiwoods_extractcore.log', 'a') as f:
+            f.write(filename+'\n')
+            f.write(str(sys.exc_info())+'\n\n')
+        continue

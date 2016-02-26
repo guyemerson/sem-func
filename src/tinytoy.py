@@ -1,4 +1,4 @@
-from dmrs.core import PointerNode as Node, Link, DictPointDmrs as Dmrs
+from pydmrs.core import PointerNode as Node, Link, DictPointDmrs as Dmrs
 import pickle
 
 noun = ['dog','duck', 'pigeon']

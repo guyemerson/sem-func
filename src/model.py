@@ -1,27 +1,31 @@
-from numpy import array, random, tensordot, zeros, outer, arange, absolute, sign, minimum, amax, convolve
+from numpy import array, random, tensordot, dot, zeros, outer, arange, absolute, sign, minimum, amax, convolve
 from scipy.special import expit
 from scipy.spatial.distance import cosine
+from math import sqrt, exp
+from collections import Counter
 import pickle
-from dmrs.core import PointerNode, DictPointDmrs
+from pydmrs.core import PointerNode, DictPointDmrs
 
 class SemFuncModel():
-    def __init__(self, corpus, neg_graphs, dims, card, rate_link, rate_pred, l2_link, l2_pred, l1_link, l1_pred, init_range, minibatch, print_every):
+    def __init__(self, corpus, neg_graphs, dims, card, rate, rate_ratio, l2, l2_ratio, l1, l1_ratio, bias, init_range, minibatch, print_every, neg_samples):
         """
         Corpus and neg_graphs should each have distinct nodeids for all nodes
         """
         # Hyperparameters
-        self.rate_link = rate_link
-        self.rate_pred = rate_pred
-        self.L2_link = l2_link
-        self.L2_pred = l2_pred
-        self.L1_link = l1_link
-        self.L1_pred = l1_pred
+        self.rate_link = rate / sqrt(rate_ratio)
+        self.rate_pred = rate * sqrt(rate_ratio)
+        self.L2_link = 1 - 2 * self.rate_link * l2 / sqrt(l2_ratio)
+        self.L2_pred = 1 - 2 * self.rate_pred * l2 * sqrt(l2_ratio)
+        self.L1_link = self.rate_link * l1 / sqrt(l1_ratio)
+        self.L1_pred = self.rate_pred * l1 * sqrt(l1_ratio)
         self.minibatch = minibatch
+        self.bias = bias
         # Print options
         self.print_every = print_every
-        # Indices mapping to node tokens, predicate types, and link types
+        # Dicts for graphs, nodes, and pred frequencies
         self.graphs = dict(enumerate(corpus))
         self.nodes = {n.nodeid:n for x in corpus for n in x.iter_nodes()}
+        self.freq = Counter(n.pred for n in self.nodes.values())
         # Dimensions of matrices
         self.D = dims
         self.N = len(self.nodes)
@@ -30,11 +34,14 @@ class SemFuncModel():
         # Latent entities, link weights, and pred weights
         self.C = card
         self.Crange = arange(card+1)
-        self.ents = random.binomial(1, card/dims, (self.N, self.D)) # approximate sparsity
-        self.link_wei = random.uniform(0, init_range, (self.L, self.D, self.D)) # link, from, to
+        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
         self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
+        self.ents = zeros((self.N, self.D))
+        self.resample(self.nodes.values(), self.ents)  # Initialise ents just using preds (link weights set to zero)
+        #self.link_wei = random.uniform(0, init_range, (self.L, self.D, self.D))
         self.link_sumsq = zeros((self.L, self.D, self.D))
         self.pred_sumsq = zeros((self.V, self.D))
+        self.calc_av_pred()
         # Particles for negative samples
         self.neg_graphs = dict(enumerate(neg_graphs))
         self.neg_nodes = {n.nodeid:n for x in neg_graphs for n in x.iter_nodes()}
@@ -45,8 +52,16 @@ class SemFuncModel():
         neg_links = sum(len(n.outgoing) for n in self.neg_nodes.values())
         self.neg_link_weight = pos_links / neg_links
         #self.neg_pred_weight = len(self.nodes) / len(self.neg_nodes)
+        # Negative pred samples
+        self.NEG = neg_samples
+        self.neg_preds = {n.nodeid:[n.pred]*neg_samples for n in self.nodes.values()}
+        
+        self.approx = []
     
     # Training functions
+    
+    def calc_av_pred(self):
+        self.av_pred = sum(self.freq[i] * self.pred_wei[i] for i in range(self.V)) / self.N  # average predicate
     
     def resample(self, nodes, ents, pred=True):
         for n in nodes:
@@ -114,6 +129,74 @@ class SemFuncModel():
     def sample_particle_batch(self, nodes):
         self.resample(nodes, self.neg_ents, pred=False)
     
+    def resample_metro(self, nodes, ents):
+        # uniformly pick an on and an off unit to switch
+        # calculate ratio of exp(-E)*pred(x) for x and x'
+        # calculate probability of average predicate for x and x'
+        # accept or reject x' based on ratio 
+        for n in nodes:
+            # Pick an on and an off unit to switch
+            old_jth = random.randint(self.C)
+            new_jth = random.randint(self.D-self.C)
+            old_ent = ents[n.nodeid]
+            on = 0
+            for i, val in enumerate(old_ent):
+                if val:
+                    if on == old_jth:
+                        old_i = i
+                        break
+                    else:
+                        on += 1
+            off = 0
+            for i, val in enumerate(old_ent):
+                if not val:
+                    if off == new_jth:
+                        new_i = i
+                        break
+                    else:
+                        off += 1
+            new_ent = array(old_ent)
+            new_ent[old_i] = 0
+            new_ent[new_i] = 1
+            
+            # Calculate Metropolis-Hastings ratio
+            # First, background energy of entities:
+            negenergy = 0
+            for link in n.outgoing:
+                negenergy += dot(self.link_wei[link.rargname, new_i, :],
+                                 ents[link.end, :])
+                negenergy -= dot(self.link_wei[link.rargname, old_i, :],
+                                 ents[link.end, :])
+            for link in n.incoming:
+                negenergy += dot(self.link_wei[link.rargname, :, new_i],
+                                 ents[link.start, :])
+                negenergy -= dot(self.link_wei[link.rargname, :, old_i],
+                                 ents[link.start, :])
+            ratio = exp(negenergy)
+            # Next, probability of the predicate being applicable:
+            ratio *= self.prob(new_ent, n.pred)
+            ratio /= self.prob(old_ent, n.pred)
+            # Finally, weighted number of other predicates that are true:
+            
+            exact_ratio = ratio
+            
+            # Use an approximation...
+            ratio *= exp(0.5*(self.av_pred[old_i] - self.av_pred[new_i]))
+            
+            # Exact... slow!
+            exact_ratio /= sum(self.freq[i] * self.prob(new_ent, i) for i in range(self.V))
+            exact_ratio *= sum(self.freq[i] * self.prob(old_ent, i) for i in range(self.V))
+            
+            self.approx.append((ratio, exact_ratio))
+            
+            # Accept or reject the new entity
+            if ratio > 1:
+                switch = True
+            else:
+                switch = random.binomial(1, ratio)
+            if switch:
+                ents[n.nodeid] = new_ent
+        
     def contrast(self):
         # Corpus
         link_obs = zeros((self.L, self.D, self.D))
@@ -144,7 +227,7 @@ class SemFuncModel():
                 link_obs[link.rargname, :,:] += outer(ents[n.nodeid, :], ents[link.end, :])
         return link_obs
     
-    def observe_preds(self, nodes):
+    def observe_preds_old(self, nodes):
         pred_obs = zeros((self.V, self.D))
         for n in nodes:
             pred_obs[n.pred, :] += self.ents[n.nodeid, :]
@@ -156,6 +239,53 @@ class SemFuncModel():
             m = random.randint(self.N)
             pred_neg[n.pred, :] += self.ents[m,:]
         return pred_neg
+    
+    def observe_preds_fancy(self, nodes):
+        pred_grad = zeros((self.V, self.D))
+        for n in nodes:
+            m = random.randint(self.N)
+            pos = self.ents[n.nodeid, :]
+            neg = self.ents[m, :]
+            p_pos = self.prob(pos, n.pred)
+            p_neg = self.prob(neg, self.nodes[m].pred)
+            factor = (1 - p_pos*(1-p_neg))
+            diff = pos - neg
+            pred_grad[n.pred, :] += factor * diff
+        return pred_grad
+        
+        # The negative samples for preds need to be chosen more carefully
+    
+    def observe_preds(self, nodes):
+        pred_obs = zeros((self.V, self.D))
+        for n in nodes:
+            ent = self.ents[n.nodeid, :]
+            pred_obs[n.pred, :] += ent * (1 - self.prob(ent, n.pred))
+        return pred_obs
+    
+    def observe_preds_neg(self, nodes):
+        pred_neg = zeros((self.V, self.D))
+        for n in nodes:
+            ent = self.ents[n.nodeid, :]
+            
+            # Resample the negative preds
+            for i, old in enumerate(self.neg_preds[n.nodeid]):
+                m = random.randint(self.N)
+                new = self.nodes[m].pred
+                # Metropolis-Hastings ratio
+                ratio = self.freq[new] * self.prob(ent, new) \
+                       /self.freq[old] / self.prob(ent, old)
+                if ratio > 1:
+                    switch = True
+                else:
+                    switch = random.binomial(1, ratio)
+                if switch:
+                    self.neg_preds[n.nodeid][i] = new
+                else:
+                    new = old
+                
+                # Get gradient
+                pred_neg[new, :] += ent * (1 - self.prob(ent, new))
+        return pred_neg / self.NEG
     
     def descend(self):
         link_del, pred_del = self.contrast()
@@ -180,14 +310,29 @@ class SemFuncModel():
                 batch_graphs = [self.graphs[j] for j in indices[i : i+minibatch]]
                 batch = [n for g in batch_graphs for n in g.iter_nodes()]
                 # Resample latent variables
-                self.sample_latent_batch(batch)
+                self.resample_metro(batch, self.ents)
+                #self.sample_latent_batch(batch)
                 self.sample_particle_batch(self.neg_nodes.values())
                 neg_link_ratio = len(batch) / self.K
                 # Observe latent variables, particles, and negative samples
                 link_del = self.observe_links(batch, self.ents)
                 link_del -= neg_link_ratio * self.observe_links(self.neg_nodes.values(), self.neg_ents)
+                
+                """
+                # Questionable pred sampling
                 pred_del = self.observe_preds(batch)
                 pred_del -= self.neg_sample_preds(batch)
+                """
+                
+                """
+                #!!!
+                # Slow learning at convergence
+                pred_del = self.observe_preds_fancy(batch)
+                """
+                # Correct pred gradients
+                pred_del = self.observe_preds(batch)
+                pred_del -= self.observe_preds_neg(batch)
+                
                 # Descend
                 self.link_wei += self.rate_link * link_del
                 self.pred_wei += self.rate_pred * pred_del
@@ -201,6 +346,7 @@ class SemFuncModel():
                 for n in batch:
                     self.pred_wei[n.pred, :] *= self.L2_pred
                     l1_reg(self.pred_wei[n.pred, :], self.L1_pred)
+                self.calc_av_pred()
             # Print regularly
             if e % print_every == 0:
                 print(self.link_wei)
@@ -210,6 +356,37 @@ class SemFuncModel():
                 print(self.average_energy())
                 with open('../data/out.pkl','wb') as f:
                     pickle.dump(self, f)
+                
+                rr = [y/x for x,y in self.approx]
+                N = len(rr)
+                more = len([x for x in rr if x>1])
+                doub = len([x for x in rr if x>2])
+                half = len([x for x in rr if x<1/2])
+                ten = len([x for x in rr if x>10])
+                tth = len([x for x in rr if x<1/10])
+                print(sum(rr)/N)
+                print('more', more/N)
+                print('doub', doub/N)
+                print('half', half/N)
+                print('ten', ten/N)
+                print('tth', tth/N)
+                
+                print('max one:')
+                rr = [min(y,1)/min(x,1) for x,y in self.approx]
+                N = len(rr)
+                more = len([x for x in rr if x>1])
+                doub = len([x for x in rr if x>2])
+                half = len([x for x in rr if x<1/2])
+                ten = len([x for x in rr if x>10])
+                tth = len([x for x in rr if x<1/10])
+                print(sum(rr)/N)
+                print('more', more/N)
+                print('doub', doub/N)
+                print('half', half/N)
+                print('ten', ten/N)
+                print('tth', tth/N)
+                
+                self.approx = []
         
     def train_alternate(self, epochs, minibatch=None, print_every=None, streak=3):
         if minibatch == None:
@@ -286,13 +463,13 @@ class SemFuncModel():
     
     def sample_energy(self, graph, samples=5, burnin=5, interval=2, pred=True):
         e = 0
-        raw_ents = random.binomial(1, 0.5, (len(graph), self.D))
+        raw_ents = zeros((len(graph), self.D))
         index = {n.nodeid:i for i,n in enumerate(graph.iter_nodes())}
         ents = WrappedVectors(raw_ents, index)
         for i in range(-burnin, 1+(samples-1)*interval):
             self.resample(graph.iter_nodes(), ents, pred=pred)
             if i >= 0 and i % interval == 0:
-                e -= self.energy(graph, ents, pred=pred)
+                e += self.energy(graph, ents, pred=pred)
         return e/samples
     
     def cosine_of_parameters(self, pred1, pred2):
@@ -318,8 +495,7 @@ class SemFuncModel():
         return total/samples
     
     def prob(self, ent, pred):
-        return expit(tensordot(self.pred_wei[pred, :],
-                               ent, (0,0)))
+        return expit(dot(ent, self.pred_wei[pred, :]) + self.bias)
 
 class WrappedVectors():
     """
