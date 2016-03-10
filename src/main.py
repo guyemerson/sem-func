@@ -5,9 +5,10 @@ from pydmrs.core import DictPointDmrs as Dmrs
 from pydmrs.core import PointerNode as Node
 from pydmrs.core import RealPred, GPred, Link, LinkLabel
 from copy import copy
+from collections import Counter
 import pickle
 import warnings
-from model import SemFuncModel
+from model import SemFuncModel, ToyTrainingSetup, ToyTrainer
 
 
 if __name__ == "__main__":
@@ -50,23 +51,39 @@ if __name__ == "__main__":
             neg_dmrs.append(empty_dmrs(i, j))
             i += j+1
     
+    # Preds
+    
+    max_pred = max(n.pred for g in dmrs for n in g.iter_nodes())
+    pred_freq = zeros(max_pred+1)
+    for g in dmrs:
+        for n in g.iter_nodes():
+            pred_freq[n.pred] += 1
+    preds = list(range(max_pred+1))
+    
+    # Links
+    
+    max_link = max(l.rargname for g in dmrs for l in g.iter_links())
+    links = list(range(max_link+1))
+    
     # Set up model
-    model = SemFuncModel(dmrs, neg_dmrs,
+    model = SemFuncModel(preds, links, pred_freq,
                          dims = 20,
                          card = 3,
+                         bias = -5,
+                         init_range = 1)
+    setup = ToyTrainingSetup(model,
                          rate = 0.01,
                          rate_ratio = 1,
-                         l2 = 0.0001,
+                         l2 = 0.001,
                          l2_ratio = 10,
                          l1 = 0.000001,
-                         l1_ratio = 1,
-                         init_range = 1,
-                         print_every = 10,
-                         minibatch = 10,
-                         bias = -5,
+                         l1_ratio = 1)
+    trainer = ToyTrainer(setup, dmrs, neg_dmrs,
                          neg_samples = 5)
     
-    model.train(50000)
+    trainer.train(500,
+                  minibatch = 10,
+                  print_every = 10)
     """
     import cProfile
     cProfile.runctx('model.train(100)',globals(),locals())
