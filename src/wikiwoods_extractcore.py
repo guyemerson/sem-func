@@ -1,5 +1,6 @@
 import sys, os, gzip, pickle
-from dmrs.core import ListDmrs as Dmrs, RealPred, GPred
+from pydmrs.core import ListDmrs as Dmrs,
+from pydmrs.components import RealPred, GPred
 
 def extract(xmlstring, sits):
     """Extract situations from a DMRS in XML form"""
