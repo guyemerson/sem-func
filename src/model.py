@@ -25,6 +25,8 @@ class SemFuncModel():
         self.link_name = links
         # Parameters
         self.bias = bias
+        if isinstance(freq, list):
+            freq = array(freq)
         self.freq = freq / sum(freq)
         assert len(freq) == len(preds)
         # Constants
@@ -220,7 +222,7 @@ class SemFuncModel():
         new_pred = random.choice(self.pred_tokens)
         # Metropolis-Hastings ratio
         ratio = self.freq[new_pred] * self.prob(vector, new_pred) \
-               /self.freq[old_pred] * self.prob(vector, old_pred)
+              /(self.freq[old_pred] * self.prob(vector, old_pred))
         # Decide whether to switch
         if ratio > 1:
             switch = True
@@ -379,13 +381,13 @@ class ToyTrainingSetup():
             link_info = self.reform_links(n, ents)
             self.model.resample_conditional(vec, pred, *link_info)
     
-    def resample_pred_batch(self, nodes, neg_preds, ents):
+    def resample_pred_batch(self, nodes, ents, neg_preds):
         """
         Resample the negative preds for a batch of nodes,
         conditioning on the latent entity vectors.
         :param nodes: iterable of nodes
-        :param neg_preds: matrix of negative preds
         :param ents: matrix of entity vectors
+        :param neg_preds: matrix of negative preds
         """
         for n in nodes:
             nid = n.nodeid
@@ -469,10 +471,12 @@ class ToyTrainingSetup():
         """
         # Resample latent variables
         self.resample_conditional_batch(pos_nodes, pos_ents)
-        self.resample_pred_batch(pos_nodes, neg_preds, pos_ents)
+        self.resample_pred_batch(pos_nodes, pos_ents, neg_preds)
         self.resample_background_batch(neg_nodes, neg_ents)
-        neg_ratio = len(pos_nodes) / len(neg_nodes)
+        
+        # Ratio in size between positive and negative samples
         # (Note that this assumes positive and negative links are balanced)
+        neg_ratio = len(pos_nodes) / len(neg_nodes)
         
         # Observe gradients
         link_del, pred_del = self.observe_latent_batch(pos_nodes, pos_ents, neg_preds)

@@ -3,7 +3,8 @@ from scipy.special import expit
 from scipy.spatial.distance import cosine
 from pydmrs.core import DictPointDmrs as Dmrs
 from pydmrs.core import PointerNode as Node
-from pydmrs.core import RealPred, GPred, Link, LinkLabel
+from pydmrs.core import Link, LinkLabel
+from pydmrs.components import RealPred, GPred
 from copy import copy
 from collections import Counter
 import pickle
@@ -72,18 +73,18 @@ if __name__ == "__main__":
                          bias = -5,
                          init_range = 1)
     setup = ToyTrainingSetup(model,
-                         rate = 0.01,
+                         rate = 0.001,
                          rate_ratio = 1,
-                         l2 = 0.001,
-                         l2_ratio = 10,
-                         l1 = 0.000001,
+                         l2 = 100,
+                         l2_ratio = 0.1,
+                         l1 = 0.0001,
                          l1_ratio = 1)
     trainer = ToyTrainer(setup, dmrs, neg_dmrs,
                          neg_samples = 5)
     
     trainer.train(500,
                   minibatch = 10,
-                  print_every = 10)
+                  print_every = 1)
     """
     import cProfile
     cProfile.runctx('model.train(100)',globals(),locals())
