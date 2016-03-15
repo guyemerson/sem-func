@@ -295,11 +295,182 @@ class SemFuncModel():
             pred_grad_matrix[p] -= self.observe_pred(vector, p) / num_preds
         # Return gradient matrices
         return link_grad_matrix, pred_grad_matrix
+    
+    # Testing functions
+    
+    def background_energy(self, links, ents):
+        """
+        Calculate the background energy of a DMRS graph with given entity vectors
+        :param links: an iterable of links of the form (start, end, label) 
+        :param ents: an array of entity vectors, indexed consistently with links
+        :return: the energy
+        """
+        e = 0
+        # Add energy from each link
+        for l in links:
+            # This also allows overloading of pydmrs Link objects
+            start = l[0]
+            end = l[1]
+            label = l[2]
+            e -= dot(dot(self.link_wei[label],
+                         ents[end]),
+                     ents[start])
+        return e
+    
+    def pred_energy(self, ent, pred):
+        """
+        Calculate the energy of a predicate with a given entity
+        :param ent: an entity vector
+        :param pred: a predicate
+        :return: the energy
+        """
+        return -( dot(self.pred_wei[pred], ent) + self.bias )
+    
+    def cosine_of_parameters(self, pred1, pred2):
+        """
+        Calculate the cosine distance (1 - normalised dot product)
+        between the weights for a pair of predicates
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :return: the distance
+        """
+        return cosine(self.pred_wei[pred1],
+                      self.pred_wei[pred2])
+    
+    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
+        """
+        Initialise an entity vector from a pred
+        :param pred: a predicate
+        :param low: (default 0.01) the minimum non-sparse probability of each component
+        :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
+        prob = self.pred_wei[pred].clip(low, high)
+        return self.sample_card_restr(prob)
+    
+    def sample_from_pred(self, pred, samples=5, burnin=5, interval=2):
+        """
+        Sample entity vectors conditioned on a predicate
+        :param pred: a predicate
+        :param samples: (default 5) number of samples to average over
+        :param burnin: (default 5) number of samples to skip before averaging starts
+        :param interval: (default 2) number of samples to take between those used in the average
+        :return: a generator of entity vectors
+        """
+        v = self.init_vec_from_pred(pred)
+        for _ in range(max(0, burnin-interval)):
+            self.resample_conditional(v, pred, (),(),(),())
+        for _ in range(samples):
+            for _ in range(interval):
+                self.resample_conditional(v, pred, (),(),(),())
+            yield v.copy()
+    
+    def mean_sample_from_pred(self, pred, samples=5, burnin=5, interval=2):
+        """
+        Sample entity vectors conditioned on a predicate, and average them
+        :param pred: a predicate
+        :param samples: (default 5) number of samples to average over
+        :param burnin: (default 5) number of samples to skip before averaging starts
+        :param interval: (default 2) number of samples to take between those used in the average
+        :return: the mean entity vector
+        """
+        return sum(self.sample_from_pred(pred, samples=samples, burnin=burnin, interval=interval)) / samples
+    
+    def cosine_samples(self, pred1, pred2, samples=5, burnin=5, interval=2):
+        """
+        Calculate the average cosine distance (1 - normalised dot product)
+        between sampled entity vectors conditioned on a pair of predicates
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :param samples: (default 5) number of samples to average over
+        :param burnin: (default 5) number of samples to skip before averaging starts
+        :param interval: (default 2) number of samples to take between those used in the average
+        :return: the cosine distance
+        """
+        # As dot products are distributive over addition, we can take the dot product of the sums
+        mean1 = self.mean_sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval)
+        mean2 = self.mean_sample_from_pred(pred2, samples=samples, burnin=burnin, interval=interval)
+        return cosine(mean1, mean2)
+    
+    def implies(self, pred1, pred2, samples=5, burnin=5, interval=2):
+        """
+        Calculate the probability that pred1 implies pred2
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :param samples: (default 5) number of samples to average over
+        :param burnin: (default 5) number of samples to skip before averaging starts
+        :param interval: (default 2) number of samples to take between those used in the average
+        :return: the probability pred1 implies pred2
+        """
+        total = 0
+        ents = self.sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval)
+        for v in ents:
+            total += self.prob(v, pred2)
+        return total/samples
+    
+
+class WrappedVectors():
+    """
+    Access vectors according to different indices.
+    """
+    def __init__(self, matrix, index):
+        """
+        Initialise the object
+        :param matrix: a numpy matrix
+        :param index: a dict mapping from desired keys to numpy indices
+        """
+        self.matrix = matrix
+        self.index = index
+    
+    def __getitem__(self, key):
+        """
+        Get an item
+        :param key: 2-tuple (vector index, numpy index)
+        :return: what numpy would return 
+        """
+        return self.matrix[self.index[key[0]], key[1]]
+    
+    def __setitem__(self, key, value):
+        """
+        Set an item
+        :param key: 2-tuple (vector index, numpy index)
+        :param value: the new value
+        """
+        self.matrix[self.index[key[0]], key[1]] = value
+
+
+
+# Converting pydmrs data to form required by SemFuncModel
+
+def reform_links(self, node, ents):
+    """
+    Get the links from a PointerNode,
+    and convert them to the form required by SemFuncModel
+    :param node: a PointerNode
+    :param ents: a matrix of entity vectors (indexed by nodeid)
+    """
+    out_labs = [l.rargname for l in node.get_out(itr=True)]
+    out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
+    in_labs = [l.rargname for l in node.get_in(itr=True)]
+    in_vecs = [ents[l.start] for l in node.get_in(itr=True)]
+    return out_labs, out_vecs, in_labs, in_vecs
+
+def reform_out_links(self, node, ents):
+    """
+    Get the outgoing links from a PointerNode,
+    and convert them to the form required by SemFuncModel
+    :param node: a PointerNode
+    :param ents: a matrix of entity vectors (indexed by nodeid)
+    """
+    out_labs = [l.rargname for l in node.get_out(itr=True)]
+    out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
+    return out_labs, out_vecs
 
 
 class ToyTrainingSetup():
     """
-    A semantic function model with a training regime
+    A semantic function model with a training regime.
+    Expects pydmrs data during training.
     """
     def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio):
         """
@@ -329,32 +500,6 @@ class ToyTrainingSetup():
         self.pred_sumsq = zeros_like(self.pred_wei)
         '''
     
-    # Converting pydmrs data to form required by SemFuncModel
-    
-    def reform_links(self, node, ents):
-        """
-        Get the links from a PointerNode,
-        and convert them to the form required by SemFuncModel
-        :param node: a PointerNode
-        :param ents: a matrix of entity vectors (indexed by nodeid)
-        """
-        out_labs = [l.rargname for l in node.get_out(itr=True)]
-        out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
-        in_labs = [l.rargname for l in node.get_in(itr=True)]
-        in_vecs = [ents[l.start] for l in node.get_in(itr=True)]
-        return out_labs, out_vecs, in_labs, in_vecs
-    
-    def reform_out_links(self, node, ents):
-        """
-        Get the outgoing links from a PointerNode,
-        and convert them to the form required by SemFuncModel
-        :param node: a PointerNode
-        :param ents: a matrix of entity vectors (indexed by nodeid)
-        """
-        out_labs = [l.rargname for l in node.get_out(itr=True)]
-        out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
-        return out_labs, out_vecs
-    
     # Batch resampling
     
     def resample_background_batch(self, nodes, ents):
@@ -365,7 +510,7 @@ class ToyTrainingSetup():
         :param ents: a matrix of entity vectors (indexed by nodeid) 
         """
         for n in nodes:
-            link_info = self.reform_links(n, ents)
+            link_info = reform_links(n, ents)
             ents[n.nodeid] = self.model.resample_background(*link_info)
     
     def resample_conditional_batch(self, nodes, ents):
@@ -378,7 +523,7 @@ class ToyTrainingSetup():
         for n in nodes:
             vec = ents[n.nodeid]
             pred = n.pred
-            link_info = self.reform_links(n, ents)
+            link_info = reform_links(n, ents)
             self.model.resample_conditional(vec, pred, *link_info)
     
     def resample_pred_batch(self, nodes, ents, neg_preds):
@@ -409,7 +554,7 @@ class ToyTrainingSetup():
         for n in nodes:
             # For each node, add gradients from outgoing links
             vec = ents[n.nodeid]
-            out_labs, out_vecs = self.reform_out_links(n, ents)
+            out_labs, out_vecs = reform_out_links(n, ents)
             self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrix)
         return gradient_matrix
     
@@ -426,7 +571,7 @@ class ToyTrainingSetup():
         for n in nodes:
             # For each node, add gradients
             nid = n.nodeid
-            out_labs, out_vecs = self.reform_out_links(n, ents)
+            out_labs, out_vecs = reform_out_links(n, ents)
             self.model.observe_latent(ents[nid], n.pred, neg_preds[nid], out_labs, out_vecs, link_grad, pred_grad)
         return link_grad, pred_grad
     
@@ -485,6 +630,17 @@ class ToyTrainingSetup():
         # Descend
         preds = [n.pred for n in pos_nodes]
         self.descend(link_del, pred_del, preds)
+    
+    # Testing functions
+    
+    def graph_energy(self, graph, ents):
+        """
+        Find the energy of a DMRS graph, given entity vectors
+        :param graph: a pydmrs Dmrs object
+        :param ents: the entity vectors, indexed by nodeid
+        :return: the energy
+        """
+        return self.model.background_energy(graph.iter_links(), ents)
 
 
 class ToyTrainer():
@@ -510,8 +666,7 @@ class ToyTrainer():
         # Latent entities
         self.ents = empty((self.N, self.model.D))
         for i, n in enumerate(self.nodes):
-            prob = (self.model.pred_wei[n.pred] + 0.01).clip(0,0.8)
-            self.ents[i] = self.model.sample_card_restr(prob)  # Initialise using preds
+            self.ents[i] = self.model.init_vec_from_pred(n.pred)
         # Particles for negative samples
         self.neg_graphs = neg_graphs
         self.neg_nodes = [n for g in neg_graphs for n in g.nodes]
@@ -554,72 +709,3 @@ class ToyTrainer():
                 #print(self.average_energy())
                 with open('../data/out.pkl','wb') as f:
                     pickle.dump(self, f)
-        
-'''   
-
-    # Testing functions
-    
-    def energy(self, graph, entities, pred=True):
-        e = 0
-        for n in graph.nodes:
-            for link in n.outgoing:
-                e -= tensordot(tensordot(self.link_wei[link.rargname, :,:],
-                                         entities[n.nodeid, :], (0,0)),
-                               entities[link.end, :], (0,0))
-            if pred:
-                e -= tensordot(entities[n.nodeid, :],
-                               self.pred_wei[n.pred, :], (0,0))
-        return e
-    
-    def average_energy(self):
-        e = 0
-        for g in self.graphs.values():
-            e += self.energy(g, self.ents)
-        return e / len(self.graphs)
-    
-    def sample_energy(self, graph, samples=5, burnin=5, interval=2, pred=True):
-        e = 0
-        raw_ents = zeros((len(graph), self.D))
-        index = {n.nodeid:i for i,n in enumerate(graph.iter_nodes())}
-        ents = WrappedVectors(raw_ents, index)
-        for i in range(-burnin, 1+(samples-1)*interval):
-            self.resample(graph.iter_nodes(), ents, pred=pred)
-            if i >= 0 and i % interval == 0:
-                e += self.energy(graph, ents, pred=pred)
-        return e/samples
-    
-    def cosine_of_parameters(self, pred1, pred2):
-        return cosine(self.pred_wei[pred1, :],
-                      self.pred_wei[pred2, :])
-    
-    def cosine_samples(self, pred1, pred2, samples=5):
-        total = 0
-        ents = zeros((2, self.D))
-        nodes = [PointerNode(0, pred1), PointerNode(1, pred2)]
-        for _ in range(samples):
-            self.resample(nodes, ents)
-            total += cosine(ents[0,:], ents[1,:])
-        return total/samples 
-    
-    def implies(self, pred1, pred2, samples=5):
-        total = 0
-        ents = zeros((1, self.D))
-        nodes = [PointerNode(0, pred1)]
-        for _ in range(samples):
-            self.resample(nodes, ents)
-            total += self.prob(ents[0,:], pred2)
-        return total/samples
-    
-
-class WrappedVectors():
-    """
-    Access vectors according to different indices
-    """
-    def __init__(self, matrix, index):
-        self.matrix = matrix
-        self.index = index
-    def __getitem__(self, key):
-        return self.matrix[self.index[key[0]], key[1]]
-    def __setitem__(self, key, value):
-        self.matrix[self.index[key[0]], key[1]] = value
-'''
