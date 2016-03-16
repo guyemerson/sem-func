@@ -1,10 +1,19 @@
 import sys, os, gzip, pickle
-from pydmrs.core import ListDmrs as Dmrs,
-from pydmrs.components import RealPred, GPred
+from xml.etree.ElementTree import ParseError
 
-def extract(xmlstring, sits):
+from pydmrs.components import RealPred, GPred
+from pydmrs.core import ListDmrs as Dmrs
+
+
+def extract(xmlstring, sits, filename):
     """Extract situations from a DMRS in XML form"""
-    dmrs = Dmrs.loads_xml(xmlstring)
+    try:
+        dmrs = Dmrs.loads_xml(xmlstring)
+    except ParseError:  # badly formed XML
+        print("ParseError!")
+        with open('wikiwoods_extractcore.log', 'a') as f:
+            f.write(filename + ': ' + xmlstring.decode() + '\n')
+        return None
     # Look for verb nodes
     for n in dmrs.iter_nodes():
         if type(n.pred) == RealPred and n.pred.pos == 'v':
@@ -33,11 +42,11 @@ def extract(xmlstring, sits):
                         pronstring = end.sortinfo['pers']
                         try:
                             pronstring += end.sortinfo['num']
-                        except KeyError:
+                        except TypeError:  # info is None
                             pass
                         try:
                             pronstring += end.sortinfo['gend']
-                        except KeyError:
+                        except TypeError:  # info is None
                             pass
                         output[i] = pronstring
                     else:
@@ -70,11 +79,11 @@ for filename in sorted(os.listdir(SOURCE)):
                 if line != b'\n':
                     xml += line
                 else:  # Once we've found a blank line, extract the DMRS
-                    extract(xml, situations)
+                    extract(xml, situations, filename)
                     xml = b''
             # If the file does not end with a blank line:
             if xml != b'':
-                extract(xml, situations)
+                extract(xml, situations, filename)
         # Save the triples in TARGET
         with open(os.path.join(TARGET, newname), 'wb') as f:
             pickle.dump(situations, f)

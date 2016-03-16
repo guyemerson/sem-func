@@ -467,6 +467,278 @@ def reform_out_links(self, node, ents):
     return out_labs, out_vecs
 
 
+# Convert a triple
+def resample_background_triple(self, triple, ents):
+    """
+    Resample the latent entities for a triple,
+    using the model's background distribution.
+    :param triple: (event, agent, patient) nodeids
+    :param ents: a matrix of entity vectors (indexed by nodeid)
+    """
+    event, agent, patient = triple
+    labs = []
+    nids = [] 
+    if agent:
+        labs.append(0)
+        nids.append(agent)
+        ents[agent] = self.model.resample_background((), (), [0], [ents[event]])
+    if patient:
+        labs.append(1)
+        nids.append(patient)
+        ents[patient] = self.model.resample_background((), (), [1], [ents[event]])
+    ents[event] = self.model.resample_background(labs, nids, (), ())
+
+
+class DirectTrainingSetup():
+    """
+    A semantic function model with a training regime.
+    Expects preprocessed data during training.
+    """
+    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio):
+        """
+        Initialise the training setup
+        :param model: the semantic function model
+        :param rate: overall training rate
+        :param rate_ratio: ratio between pred and link training rates
+        :param l1: overall L1 regularisation strength
+        :param l1_ratio: ratio between pred and link L1 regularisation strengths
+        :param l2: overall L2 regularisation strength
+        :param l2_ratio: ratio between pred and link L2 regularisation strengths
+        """
+        # Semantic function model
+        self.model = model
+        self.link_wei = model.link_wei
+        self.pred_wei = model.pred_wei
+        # Hyperparameters
+        self.rate_link = rate / sqrt(rate_ratio)
+        self.rate_pred = rate * sqrt(rate_ratio)
+        self.L2_link = 1 - 2 * self.rate_link * l2 / sqrt(l2_ratio)
+        self.L2_pred = 1 - 2 * self.rate_pred * l2 * sqrt(l2_ratio)
+        self.L1_link = self.rate_link * l1 / sqrt(l1_ratio)
+        self.L1_pred = self.rate_pred * l1 * sqrt(l1_ratio)
+        '''
+        # Moving average of squared gradients...
+        self.link_sumsq = zeros_like(self.link_wei)
+        self.pred_sumsq = zeros_like(self.pred_wei)
+        '''
+    
+    # Batch resampling
+    
+    def resample_background_batch(self, batch, ents):
+        """
+        Resample the latent entities for a batch of nodes,
+        using the model's background distribution.
+        :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
+        :param ents: a matrix of entity vectors (indexed by nodeid) 
+        """
+        for nodeid, out_labs, out_ids, in_labs, in_ids in batch:
+            out_vecs = [ents[i] for i in out_ids]
+            in_vecs = [ents[i] for i in in_ids]
+            ents[nodeid] = self.model.resample_background(out_labs, out_vecs, in_labs, in_vecs)
+    
+    def resample_conditional_batch(self, batch, ents):
+        """
+        Resample the latent entities for a batch of nodes,
+        conditioning on the nodes' preds.
+        :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
+        :param ents: a matrix of entity vectors (indexed by nodeid)
+        """
+        for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
+            vec = ents[nodeid]
+            out_vecs = [ents[i] for i in out_ids]
+            in_vecs = [ents[i] for i in in_ids]
+            self.model.resample_conditional(vec, pred, out_labs, out_vecs, in_labs, in_vecs)
+    
+    def resample_pred_batch(self, batch, ents, neg_preds):
+        """
+        Resample the negative preds for a batch of nodes,
+        conditioning on the latent entity vectors.
+        :param batch: iterable of tuples (nodeid first element)
+        :param ents: matrix of entity vectors
+        :param neg_preds: matrix of negative preds
+        """
+        for x in batch:
+            nid = x[0]
+            old_preds = neg_preds[nid]
+            vec = ents[nid]
+            for i, pred in enumerate(old_preds):
+                old_preds[i] = self.model.resample_pred(vec, pred)
+    
+    # Batch gradients
+    
+    def observe_particle_batch(self, batch, ents):
+        """
+        Calculate gradients for link weights, for a fantasy particle
+        :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
+        :param ents: a matrix of particle entity vectors  
+        :return: a gradient matrix
+        """
+        gradient_matrix = zeros_like(self.link_wei)
+        for nodeid, out_labs, out_ids, _, _ in batch:
+            # For each node, add gradients from outgoing links
+            vec = ents[nodeid]
+            out_vecs = [ents[i] for i in out_ids]
+            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrix)
+        return gradient_matrix
+    
+    def observe_latent_batch(self, batch, ents, neg_preds):
+        """
+        Calculate gradients for a batch of nodes
+        :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
+        :param ents: a matrix of latent entity vectors
+        :param neg_preds: a matrix of negative samples of preds
+        :return: link gradient matrix, pred gradient matrix
+        """
+        link_grad = zeros_like(self.link_wei)
+        pred_grad = zeros_like(self.pred_wei)
+        for nodeid, pred, out_labs, out_ids, _, _ in batch:
+            # For each node, add gradients
+            vec = ents[nodeid]
+            npreds = neg_preds[nodeid]
+            out_vecs = [ents[i] for i in out_ids]
+            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grad, pred_grad)
+        return link_grad, pred_grad
+    
+    # Gradient descent
+    
+    def descend(self, link_gradient, pred_gradient, pred_list=None):
+        """
+        Descend the gradient and apply regularisation
+        :param link_gradient: gradient for link weights
+        :param pred_gradient: gradient for pred weights
+        :param pred_list: (optional) restrict regularisation to these predicates
+        """
+        # Update from the gradient
+        self.link_wei += link_gradient
+        self.pred_wei += pred_gradient
+        # Apply regularisation
+        self.link_wei *= self.L2_link
+        self.link_wei -= self.L1_link
+        if pred_list:
+            for p in pred_list:
+                self.pred_wei[p] *= self.L2_pred
+                self.pred_wei[p] -= self.L1_pred
+        else:
+            self.pred_wei *= self.L2_pred
+            self.pred_wei -= self.L1_pred
+        # Remove negative weights
+        self.link_wei.clip(0, out=self.link_wei)
+        self.pred_wei.clip(0, out=self.pred_wei)
+        # Recalculate average predicate
+        self.model.calc_av_pred()
+    
+    # Batch training
+    
+    def train_batch(self, pos_batch, pos_ents, neg_preds, neg_batch, neg_ents):
+        """
+        Train the model on a minibatch
+        :param pos_batch: iterable (from data) of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
+        :param pos_ents: matrix of latent entity vectors
+        :param neg_preds: matrix of sampled negative predicates
+        :param neg_batch: iterable (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
+        :param neg_ents: matrix of particle entity vectors
+        """
+        # Resample latent variables
+        self.resample_conditional_batch(pos_batch, pos_ents)
+        self.resample_pred_batch(pos_batch, pos_ents, neg_preds)
+        self.resample_background_batch(neg_batch, neg_ents)
+        
+        # Ratio in size between positive and negative samples
+        # (Note that this assumes positive and negative links are balanced)
+        neg_ratio = len(pos_batch) / len(neg_batch)
+        
+        # Observe gradients
+        link_del, pred_del = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
+        link_del -= neg_ratio * self.observe_particle_batch(neg_batch, neg_ents)
+        
+        # Descend
+        preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
+        self.descend(link_del, pred_del, preds)
+    
+    # Testing functions
+    
+    def graph_energy(self, nodes, ents):
+        """
+        Find the energy of a DMRS graph, given entity vectors
+        :param nodes: iterable of (nodeid, (pred,) out_labs, out_ids, in_labs, in_ids) tuples
+        :param ents: the entity vectors, indexed by nodeid
+        :return: the energy
+        """
+        links = []
+        for x in nodes:
+            start = x[0]
+            out_labs = x[-4]
+            out_ids = x[-3]
+            for i, lab in enumerate(out_labs):
+                links.append([start, out_ids[i], lab])
+        return self.model.background_energy(links, ents)
+
+
+class CoreTrainer():
+    """
+    A semantic function model with a training regime and data
+    """
+    def __init__(self, setup, data, particle, neg_samples):
+        """
+        Initialise the trainer
+        :param setup: semantic function model with training setup
+        :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
+        :param particle: fantasy particle of the form (nodeid, out_labs, out_ids, in_labs, in_ids), with increasing nodeids 
+        :param neg_samples: number of negative pred samples to draw for each node
+        """
+        # Training setup
+        self.setup = setup
+        self.model = setup.model
+        # Dicts for graphs, nodes, and pred frequencies
+        self.nodes = data
+        for i, n in enumerate(self.nodes): assert i == n[0]
+        self.N = len(self.nodes)
+        # Latent entities
+        self.ents = empty((self.N, self.model.D))
+        for i, n in enumerate(self.nodes):
+            self.ents[i] = self.model.init_vec_from_pred(n[1])
+        # Particles for negative samples
+        self.neg_nodes = particle
+        for i, n in enumerate(self.neg_nodes): assert i == n[0]
+        self.K = len(self.neg_nodes)
+        self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
+        # Negative pred samples
+        self.NEG = neg_samples
+        self.neg_preds = empty((self.N, neg_samples))
+        for n in self.nodes:
+            self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
+    
+    def train(self, epochs, minibatch, print_every):
+        """
+        Train the model on the data
+        :param epochs: number of passes over the data
+        :param minibatch: size of a minibatch (as a number of graphs)
+        :param print_every: how many epochs should pass before printing
+        """
+        M = minibatch
+        indices = arange(self.N)
+        for e in range(epochs):
+            # Randomise batches
+            # (At the moment, just one batch of particles)
+            random.shuffle(indices)
+            for i in range(0, self.N, M):
+                # Get the nodes for this batch
+                batch = indices[i : i+M]
+                # Train on this batch
+                self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
+                
+            # Print regularly
+            if e % print_every == 0:
+                print(self.model.link_wei)
+                print(self.model.pred_wei)
+                print(amax(absolute(self.model.link_wei)))
+                print(amax(absolute(self.model.pred_wei)))
+                #print(self.average_energy())
+                with open('../data/out.pkl','wb') as f:
+                    pickle.dump(self, f)
+
+
+
 class ToyTrainingSetup():
     """
     A semantic function model with a training regime.
