@@ -7,12 +7,14 @@ from pydmrs.core import ListDmrs as Dmrs
 
 def extract(xmlstring, sits, filename):
     """Extract situations from a DMRS in XML form"""
+    xmlstring.replace(b'<', b'&lt;')
+    xmlstring.replace(b'&', b'&amp;')
     try:
         dmrs = Dmrs.loads_xml(xmlstring)
-    except ParseError:  # badly formed XML
+    except ParseError as e:  # badly formed XML
         print("ParseError!")
         with open('wikiwoods_extractcore.log', 'a') as f:
-            f.write(filename + ': ' + xmlstring.decode() + '\n')
+            f.write(filename + ':\n' + xmlstring.decode() + '\n' + str(e) + '\n')
         return None
     # Look for verb nodes
     for n in dmrs.iter_nodes():
@@ -35,7 +37,7 @@ def extract(xmlstring, sits, filename):
                         output[i] = pred
                 else:
                     # Ignore coordinations
-                    if pred == GPred('implicit_q'):
+                    if pred == GPred('implicit_conj'):
                         continue
                     # Record information about pronouns
                     elif pred == GPred('pron'):

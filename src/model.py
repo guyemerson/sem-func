@@ -3,7 +3,7 @@ from scipy.special import expit
 from scipy.spatial.distance import cosine
 from math import sqrt, exp
 from collections import Counter
-import pickle
+import pickle, sys
 
 class SemFuncModel():
     """
@@ -657,7 +657,7 @@ class DirectTrainingSetup():
     
     # Testing functions
     
-    def graph_energy(self, nodes, ents):
+    def graph_background_energy(self, nodes, ents):
         """
         Find the energy of a DMRS graph, given entity vectors
         :param nodes: iterable of (nodeid, (pred,) out_labs, out_ids, in_labs, in_ids) tuples
@@ -674,7 +674,7 @@ class DirectTrainingSetup():
         return self.model.background_energy(links, ents)
 
 
-class CoreTrainer():
+class DirectTrainer():
     """
     A semantic function model with a training regime and data
     """
@@ -708,35 +708,46 @@ class CoreTrainer():
         for n in self.nodes:
             self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
     
-    def train(self, epochs, minibatch, print_every):
+    def train(self, epochs, minibatch, print_every, dump_file=None):
         """
         Train the model on the data
         :param epochs: number of passes over the data
         :param minibatch: size of a minibatch (as a number of graphs)
         :param print_every: how many epochs should pass before printing
         """
-        M = minibatch
+        # Record training in the setup
+        self.setup.minibatch = minibatch
+        if not hasattr(self.setup, 'epochs'):
+            self.setup.epochs = 0
+        
+        # Indices of nodes, to be randomised
         indices = arange(self.N)
         for e in range(epochs):
             # Randomise batches
             # (At the moment, just one batch of particles)
             random.shuffle(indices)
-            for i in range(0, self.N, M):
+            # Take batches
+            for i in range(0, self.N, minibatch):
                 # Get the nodes for this batch
-                batch = indices[i : i+M]
+                batch = [self.nodes[i] for i in indices[i : i+minibatch]]
                 # Train on this batch
                 self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
                 
             # Print regularly
-            if e % print_every == 0:
+            if (e+1) % print_every == 0:
                 print(self.model.link_wei)
                 print(self.model.pred_wei)
-                print(amax(absolute(self.model.link_wei)))
-                print(amax(absolute(self.model.pred_wei)))
-                #print(self.average_energy())
-                with open('../data/out.pkl','wb') as f:
-                    pickle.dump(self, f)
-
+                print('max link weight:', amax(absolute(self.model.link_wei)))
+                print('max pred weight:', amax(absolute(self.model.pred_wei)))
+                print('avg data back E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
+                print('avg part back E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
+                print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
+                print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)
+                if dump_file:
+                    with open(dump_file, 'wb') as f:
+                        pickle.dump(self.setup, f)
+                # Record training in the setup
+                self.setup.epochs += print_every
 
 
 class ToyTrainingSetup():
@@ -905,7 +916,7 @@ class ToyTrainingSetup():
     
     # Testing functions
     
-    def graph_energy(self, graph, ents):
+    def graph_background_energy(self, graph, ents):
         """
         Find the energy of a DMRS graph, given entity vectors
         :param graph: a pydmrs Dmrs object
