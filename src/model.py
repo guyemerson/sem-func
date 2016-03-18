@@ -1,4 +1,4 @@
-from numpy import array, random, tensordot, dot, zeros, zeros_like, outer, arange, absolute, sign, minimum, amax, convolve, bool_, empty
+from numpy import array, random, tensordot, dot, zeros, zeros_like, outer, arange, absolute, sign, minimum, amax, convolve, bool_, empty, histogram, count_nonzero, inf
 from scipy.special import expit
 from scipy.spatial.distance import cosine
 from math import sqrt, exp
@@ -717,17 +717,41 @@ class DirectTrainer():
         for n in self.nodes:
             self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
     
-    def train(self, epochs, minibatch, print_every, dump_file=None):
+    def get_histogram(self, matrix, bins):
+        """
+        Get a histogram to summarise the distribution of values in a weight matrix
+        :param matrix: the weight matrix to be summarised
+        :param bins: the histogram bin edges (0 and inf will be added to this)
+        :return: the histogram, as probability mass (not density) in each bin
+        """
+        bin_edges = [0] + list(bins) + [inf]
+        histo_no_zero, _ = histogram(matrix, bin_edges)
+        num_zero = matrix.size - count_nonzero(matrix)
+        histo_no_zero[0] -= num_zero
+        histo = array([num_zero] + list(histo_no_zero)) / matrix.size
+        return histo
+    
+    def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), dump_file=None):
         """
         Train the model on the data
         :param epochs: number of passes over the data
         :param minibatch: size of a minibatch (as a number of graphs)
         :param print_every: how many epochs should pass before printing
+        :param histogram_bins: edges of bins to summarise distribution of weights
+            (default: 0.05, 0.2, 1)
+        :param dump_file: (optional) file to save the trained model
         """
         # Record training in the setup
         self.setup.minibatch = minibatch
         if not hasattr(self.setup, 'epochs'):
             self.setup.epochs = 0
+        
+        # Histogram bins, for printing
+        num_bins = len(histogram_bins) + 2
+        histo = zeros((3, num_bins))
+        histo[0,1:-1] = histogram_bins
+        histo[0,0] = 0
+        histo[0,-1] = inf
         
         # Indices of nodes, to be randomised
         indices = arange(self.N)
@@ -744,19 +768,25 @@ class DirectTrainer():
                 
             # Print regularly
             if (e+1) % print_every == 0:
-                print(self.model.link_wei)
-                print(self.model.pred_wei)
+                # Record training in the setup
+                self.setup.epochs += print_every
+                # Get histogram of weights
+                histo[1] = self.get_histogram(self.model.link_wei, histo[0,1:-1])
+                histo[2] = self.get_histogram(self.model.pred_wei, histo[0,1:-1])
+                # Print to console
+                print('Epoch {} complete!'.format(self.setup.epochs))
+                print('Weight histogram (link, then pred):')
+                print(histo)
                 print('max link weight:', amax(absolute(self.model.link_wei)))
                 print('max pred weight:', amax(absolute(self.model.pred_wei)))
                 print('avg data back E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
                 print('avg part back E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
                 print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
                 print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)
+                # Save to file
                 if dump_file:
                     with open(dump_file, 'wb') as f:
                         pickle.dump(self.setup, f)
-                # Record training in the setup
-                self.setup.epochs += print_every
 
 
 class ToyTrainingSetup():

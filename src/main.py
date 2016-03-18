@@ -1,7 +1,9 @@
-import sys, os, pickle
+import sys, os, pickle, numpy
 from collections import Counter
 
 from model import SemFuncModel, DirectTrainingSetup, DirectTrainer
+
+numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
 DATA = '/anfs/bigdisc/gete2/wikiwoods/core'
 
@@ -22,12 +24,12 @@ model = SemFuncModel(preds, links, pred_freq,
 setup = DirectTrainingSetup(model,
                             rate = 0.1,
                             rate_ratio = 1,
-                            l2 = 0.1,
+                            l2 = 0.001,
                             l2_ratio = 1,
-                            l1 = 0.0001,
+                            l1 = 0.000001,
                             l1_ratio = 1,
-                            ent_steps = 2,
-                            pred_steps = 2)
+                            ent_steps = 1,
+                            pred_steps = 1)
 
 pred_index = {p:i for i,p in enumerate(preds)}
 
