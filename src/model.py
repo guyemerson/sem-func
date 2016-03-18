@@ -494,7 +494,7 @@ class DirectTrainingSetup():
     A semantic function model with a training regime.
     Expects preprocessed data during training.
     """
-    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio):
+    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio, ent_steps, pred_steps):
         """
         Initialise the training setup
         :param model: the semantic function model
@@ -504,6 +504,8 @@ class DirectTrainingSetup():
         :param l1_ratio: ratio between pred and link L1 regularisation strengths
         :param l2: overall L2 regularisation strength
         :param l2_ratio: ratio between pred and link L2 regularisation strengths
+        :param ent_steps: (default 1) number of Metropolis-Hastings steps to make when resampling latent entities
+        :param pred_steps: (default 1) number of Metropolis-Hastings steps to make when resampling negative predicates
         """
         # Semantic function model
         self.model = model
@@ -516,6 +518,9 @@ class DirectTrainingSetup():
         self.L2_pred = 1 - 2 * self.rate_pred * l2 * sqrt(l2_ratio)
         self.L1_link = self.rate_link * l1 / sqrt(l1_ratio)
         self.L1_pred = self.rate_pred * l1 * sqrt(l1_ratio)
+        # Metropolis-Hasting steps
+        self.ent_steps = ent_steps
+        self.pred_steps = pred_steps
         '''
         # Moving average of squared gradients...
         self.link_sumsq = zeros_like(self.link_wei)
@@ -632,24 +637,28 @@ class DirectTrainingSetup():
     def train_batch(self, pos_batch, pos_ents, neg_preds, neg_batch, neg_ents):
         """
         Train the model on a minibatch
-        :param pos_batch: iterable (from data) of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
+        :param pos_batch: list (from data) of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
         :param pos_ents: matrix of latent entity vectors
         :param neg_preds: matrix of sampled negative predicates
-        :param neg_batch: iterable (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
+        :param neg_batch: list (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
         :param neg_ents: matrix of particle entity vectors
         """
         # Resample latent variables
-        self.resample_conditional_batch(pos_batch, pos_ents)
-        self.resample_pred_batch(pos_batch, pos_ents, neg_preds)
+        for _ in range(self.ent_steps):
+            self.resample_conditional_batch(pos_batch, pos_ents)
+        for _ in range(self.pred_steps):
+            self.resample_pred_batch(pos_batch, pos_ents, neg_preds)
         self.resample_background_batch(neg_batch, neg_ents)
-        
-        # Ratio in size between positive and negative samples
-        # (Note that this assumes positive and negative links are balanced)
-        neg_ratio = len(pos_batch) / len(neg_batch)
         
         # Observe gradients
         link_del, pred_del = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
-        link_del -= neg_ratio * self.observe_particle_batch(neg_batch, neg_ents)
+        neg_link_del = self.observe_particle_batch(neg_batch, neg_ents)
+        
+        # Average gradients by batch size
+        # (Note that this assumes positive and negative links are balanced)
+        pred_del /= len(pos_batch)
+        link_del /= len(pos_batch)
+        link_del -= neg_link_del / len(neg_batch)
         
         # Descend
         preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
