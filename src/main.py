@@ -18,7 +18,7 @@ pred_freq = [pred_count[p] for p in preds]
 model = SemFuncModel(preds, links, pred_freq,
                      dims = 50,
                      card = 5,
-                     bias = -5,
+                     init_bias = -5,
                      init_range = 1)
 
 setup = DirectTrainingSetup(model,

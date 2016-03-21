@@ -9,7 +9,7 @@ class SemFuncModel():
     """
     The core semantic function model, including the background distribution
     """
-    def __init__(self, preds, links, freq, dims, card, bias, init_range=0):
+    def __init__(self, preds, links, freq, dims, card, init_bias, init_range=0):
         """
         Initialise the model
         :param preds: names of predicates
@@ -17,14 +17,13 @@ class SemFuncModel():
         :param freq: frequency of each predicate
         :param dims: dimension of latent entities
         :param card: cardinality of latent entities
-        :param bias: bias for calculating semantic function values
+        :param init_bias: bias for calculating semantic function values
         :param init_range: (optional) range for initialising pred weights
         """
         # Names for human readability
         self.pred_name = preds
         self.link_name = links
-        # Parameters
-        self.bias = bias
+        # Fixed parameters
         if isinstance(freq, list):
             freq = array(freq)
         self.freq = freq / sum(freq)
@@ -34,9 +33,11 @@ class SemFuncModel():
         self.V = len(preds)
         self.L = len(links)
         self.C = card
-        # Weight matrices
+        # Trained weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
         self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
+        self.pred_bias = empty((self.V,))
+        self.pred_bias[:] = init_bias
         # For sampling:
         self.calc_av_pred()  # average predicate
         pred_toks = []  # fill with pred tokens, for sampling preds
@@ -53,7 +54,7 @@ class SemFuncModel():
         :param pred: a predicate
         :return: a probability
         """
-        return expit(dot(ent, self.pred_wei[pred]) + self.bias)
+        return expit(dot(ent, self.pred_wei[pred]) + self.pred_bias[pred])
     
     # Sampling
     
@@ -254,20 +255,25 @@ class SemFuncModel():
             gradient_matrix[label] += outer(vector, out_vectors[i])
         return gradient_matrix
     
-    def observe_pred(self, vector, pred, gradient_matrix=None):
+    def observe_pred(self, vector, pred, gradient_matrix=None, bias_gradient_vector=None):
         """
         Calculate pred weight gradients for a node
         :param vector: an entity vector
         :param pred: a predicate
         :param gradient_matrix: (optional) the matrix which gradients should be added to
-        :return: a vector of gradients (not the whole matrix!)
+        :param bias_gradient_vector: (optional) the vector which bias gradients should be added to
+        :return: a vector of gradients (not the whole matrix!), and the bias gradient
         """
-        grad_vector = vector * (1 - self.prob(vector, pred)) 
+        factor = 1 - self.prob(vector, pred)
+        grad_vector = vector * factor
+        bias_grad = factor
         if gradient_matrix is not None:
             gradient_matrix[pred] += grad_vector
-        return grad_vector
+        if bias_gradient_vector is not None:
+            bias_gradient_vector[pred] += bias_grad
+        return grad_vector, bias_grad
     
-    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_grad_matrix=None, pred_grad_matrix=None):
+    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_grad_matrix=None, pred_grad_matrix=None, pred_bias_grad_vector=None):
         """
         Calculate multiple gradients for a node
         :param vector: an entity vector
@@ -277,24 +283,31 @@ class SemFuncModel():
         :param out_vectors: an iterable of entity vectors
         :param link_grad_matrix: (optional) the matrix which link weight gradients should be added to
         :param pred_grad_matrix: (optional) the matrix which pred weight gradients should be added to
-        :return: link gradient matrix, pred gradient matrix
+        :param pred_bias_grad_vector: (optional) the vector which pred bias gradients should be added to
+        :return: link gradient matrix, pred gradient matrix, pred bias gradient vector
         """
         # Initialise matrices if not given
         if link_grad_matrix is None:
             link_grad_matrix = zeros_like(self.link_wei)
         if pred_grad_matrix is None:
             pred_grad_matrix = zeros_like(self.pred_wei)
+        if pred_bias_grad_vector is None:
+            pred_bias_grad_vector = zeros_like(self.pred_bias)
         # Add gradients...
         # ...from links:
         self.observe_out_links(vector, out_labels, out_vectors, link_grad_matrix)
         # ...from the pred:
-        self.observe_pred(vector, pred, pred_grad_matrix)
+        self.observe_pred(vector, pred, pred_grad_matrix, pred_bias_grad_vector)
         # ...from the negative preds:
         num_preds = neg_preds.shape[0]
         for p in neg_preds:
-            pred_grad_matrix[p] -= self.observe_pred(vector, p) / num_preds
+            grad_vec, bias_grad = self.observe_pred(vector, p)
+            grad_vec /= num_preds
+            bias_grad /= num_preds
+            pred_grad_matrix[p] -= grad_vec
+            pred_bias_grad_vector[p] -= bias_grad
         # Return gradient matrices
-        return link_grad_matrix, pred_grad_matrix
+        return link_grad_matrix, pred_grad_matrix, pred_bias_grad_vector
     
     # Testing functions
     
@@ -317,15 +330,6 @@ class SemFuncModel():
                      ents[start])
         return e
     
-    def pred_energy(self, ent, pred):
-        """
-        Calculate the energy of a predicate with a given entity
-        :param ent: an entity vector
-        :param pred: a predicate
-        :return: the energy
-        """
-        return -( dot(self.pred_wei[pred], ent) + self.bias )
-    
     def cosine_of_parameters(self, pred1, pred2):
         """
         Calculate the cosine distance (1 - normalised dot product)
@@ -336,17 +340,6 @@ class SemFuncModel():
         """
         return cosine(self.pred_wei[pred1],
                       self.pred_wei[pred2])
-    
-    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
-        """
-        Initialise an entity vector from a pred
-        :param pred: a predicate
-        :param low: (default 0.01) the minimum non-sparse probability of each component
-        :param high: (default 0.8) the maximum non-sparse probability of each component
-        :return: the vector
-        """
-        prob = self.pred_wei[pred].clip(low, high)
-        return self.sample_card_restr(prob)
     
     def sample_from_pred(self, pred, samples=5, burnin=5, interval=2):
         """
@@ -407,6 +400,19 @@ class SemFuncModel():
         for v in ents:
             total += self.prob(v, pred2)
         return total/samples
+    
+    # Util functions
+    
+    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
+        """
+        Initialise an entity vector from a pred
+        :param pred: a predicate
+        :param low: (default 0.01) the minimum non-sparse probability of each component
+        :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
+        prob = self.pred_wei[pred].clip(low, high)
+        return self.sample_card_restr(prob)
     
 
 class WrappedVectors():
@@ -511,6 +517,7 @@ class DirectTrainingSetup():
         self.model = model
         self.link_wei = model.link_wei
         self.pred_wei = model.pred_wei
+        self.pred_bias = model.pred_bias
         # Hyperparameters
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
@@ -592,30 +599,33 @@ class DirectTrainingSetup():
         :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
         :param ents: a matrix of latent entity vectors
         :param neg_preds: a matrix of negative samples of preds
-        :return: link gradient matrix, pred gradient matrix
+        :return: link gradient matrix, pred gradient matrix, pred bias gradient vector
         """
         link_grad = zeros_like(self.link_wei)
         pred_grad = zeros_like(self.pred_wei)
+        pred_bias_grad = zeros_like(self.pred_bias)
         for nodeid, pred, out_labs, out_ids, _, _ in batch:
             # For each node, add gradients
             vec = ents[nodeid]
             npreds = neg_preds[nodeid]
             out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grad, pred_grad)
-        return link_grad, pred_grad
+            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grad, pred_grad, pred_bias_grad)
+        return link_grad, pred_grad, pred_bias_grad
     
     # Gradient descent
     
-    def descend(self, link_gradient, pred_gradient, pred_list=None):
+    def descend(self, link_gradient, pred_gradient, pred_bias_gradient, pred_list=None):
         """
         Descend the gradient and apply regularisation
         :param link_gradient: gradient for link weights
         :param pred_gradient: gradient for pred weights
+        :param pred_bias_gradient: gradient for pred biases
         :param pred_list: (optional) restrict regularisation to these predicates
         """
         # Update from the gradient
         self.link_wei += link_gradient
         self.pred_wei += pred_gradient
+        self.pred_bias += pred_bias_gradient
         # Apply regularisation
         self.link_wei *= self.L2_link
         self.link_wei -= self.L1_link
@@ -623,12 +633,17 @@ class DirectTrainingSetup():
             for p in pred_list:
                 self.pred_wei[p] *= self.L2_pred
                 self.pred_wei[p] -= self.L1_pred
+                self.pred_bias[p] *= self.L2_pred
+                self.pred_bias[p] += self.L1_pred
         else:
             self.pred_wei *= self.L2_pred
             self.pred_wei -= self.L1_pred
+            self.pred_bias *= self.L2_pred
+            self.pred_bias += self.L1_pred
         # Remove negative weights
         self.link_wei.clip(0, out=self.link_wei)
         self.pred_wei.clip(0, out=self.pred_wei)
+        self.pred_bias.clip(-inf, 0, out=self.pred_bias)
         # Recalculate average predicate
         self.model.calc_av_pred()
     
@@ -651,18 +666,19 @@ class DirectTrainingSetup():
         self.resample_background_batch(neg_batch, neg_ents)
         
         # Observe gradients
-        link_del, pred_del = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
+        link_del, pred_del, pred_bias_del = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
         neg_link_del = self.observe_particle_batch(neg_batch, neg_ents)
         
         # Average gradients by batch size
         # (Note that this assumes positive and negative links are balanced)
+        pred_bias_del /= len(pos_batch)
         pred_del /= len(pos_batch)
         link_del /= len(pos_batch)
         link_del -= neg_link_del / len(neg_batch)
         
         # Descend
         preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
-        self.descend(link_del, pred_del, preds)
+        self.descend(link_del, pred_del, pred_bias_del, preds)
     
     # Testing functions
     
@@ -777,8 +793,9 @@ class DirectTrainer():
                 print('Epoch {} complete!'.format(self.setup.epochs))
                 print('Weight histogram (link, then pred):')
                 print(histo)
-                print('max link weight:', amax(absolute(self.model.link_wei)))
-                print('max pred weight:', amax(absolute(self.model.pred_wei)))
+                print('max link weight:', amax(self.model.link_wei))
+                print('max pred weight:', amax(self.model.pred_wei))
+                print('max  -pred bias:', amax(-self.model.pred_bias))
                 print('avg data back E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
                 print('avg part back E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
                 print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
