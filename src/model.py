@@ -1,15 +1,15 @@
-from numpy import array, random, tensordot, dot, zeros, zeros_like, outer, arange, absolute, sign, minimum, amax, convolve, bool_, empty, histogram, count_nonzero, inf
-from scipy.special import expit
-from scipy.spatial.distance import cosine
 from math import sqrt, exp
-from collections import Counter
-import pickle, sys
+from numpy import array, random, tensordot, dot, zeros, zeros_like, outer, arange, amax, convolve, bool_, empty, histogram, count_nonzero, inf
+import pickle
+from scipy.spatial.distance import cosine
+from scipy.special import expit
+
 
 class SemFuncModel():
     """
     The core semantic function model, including the background distribution
     """
-    def __init__(self, preds, links, freq, dims, card, init_bias, init_range=0):
+    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0):
         """
         Initialise the model
         :param preds: names of predicates
@@ -17,7 +17,8 @@ class SemFuncModel():
         :param freq: frequency of each predicate
         :param dims: dimension of latent entities
         :param card: cardinality of latent entities
-        :param init_bias: bias for calculating semantic function values
+        :param init_bias: (optional) initial bias for calculating semantic function values
+        :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
         """
         # Names for human readability
@@ -35,7 +36,9 @@ class SemFuncModel():
         self.C = card
         # Trained weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
-        self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
+        if init_card is None: init_card = dims
+        self.pred_wei = random.uniform(0, init_range, (self.V, self.D)) \
+                      * random.binomial(1, init_card / dims, (self.V, self.D))
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
         # For sampling:
@@ -747,7 +750,18 @@ class DirectTrainer():
         histo = array([num_zero] + list(histo_no_zero)) / matrix.size
         return histo
     
-    def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,6,10), dump_file=None):
+    def get_histogram_bias(self, matrix, bins):
+        """
+        Get a histogram to summarise the distribution of values in a weight matrix
+        :param matrix: the weight matrix to be summarised
+        :param bins: the histogram bin edges (0 and inf will be added to this)
+        :return: the histogram, as probability mass (not density) in each bin
+        """
+        bin_edges = [0] + list(bins) + [inf]
+        histo, _ = histogram(matrix, bin_edges)
+        return histo / matrix.size
+    
+    def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """
         Train the model on the data
         :param epochs: number of passes over the data
@@ -795,7 +809,7 @@ class DirectTrainer():
                 # Get histogram of weights
                 histo[1] = self.get_histogram(self.model.link_wei, histo[0,1:-1])
                 histo[2] = self.get_histogram(self.model.pred_wei, histo[0,1:-1])
-                histo_bias[1], _ = histogram(-self.model.pred_bias, [0]+list(histo_bias[0]))
+                histo_bias[1] = self.get_histogram_bias(-self.model.pred_bias, histo_bias[0, :-1])
                 # Print to console
                 print('Epoch {} complete!'.format(self.setup.epochs))
                 print('Weight histogram (link, then pred):')
