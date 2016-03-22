@@ -1,5 +1,5 @@
 from math import sqrt, exp
-from numpy import array, random, tensordot, dot, zeros, zeros_like, outer, arange, amax, convolve, bool_, empty, histogram, count_nonzero, inf
+from numpy import array, random, dot, zeros, zeros_like, outer, arange, amax, bool_, empty, histogram, count_nonzero, inf
 import pickle
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -81,9 +81,11 @@ class SemFuncModel():
         # The negative energy of each component depends on the links 
         negenergy = zeros(self.D)
         for i, label in enumerate(out_labels):
-            negenergy += tensordot(self.link_wei[label], out_vectors[i], (1,0))
+            # 1st axis of link_wei[label]
+            negenergy += dot(self.link_wei[label], out_vectors[i])
         for i, label in enumerate(in_labels):
-            negenergy += tensordot(self.link_wei[label], in_vectors[i], (0,0))
+            # 0th axis of link_wei[label]
+            negenergy += dot(in_vectors[i], self.link_wei[label])
         # Expit gives the probability of each component if there are no sparsity constraints
         p = expit(negenergy) # Warning! If the negenergy is above 710, expit returns nan
         return self.sample_card_restr(p)
@@ -94,8 +96,7 @@ class SemFuncModel():
         restricting the total cardinality.
         :param prob: the probability of each component being on
         """
-        minp = 1 - prob
-        
+        # If components are definitely on or off, the cardinality constraint may break:
         for p in prob:
             if p == 1:
                 print(prob)
@@ -104,40 +105,78 @@ class SemFuncModel():
         # Sparsity constraints can be enforced using belief propagation (sum-product algorithm)
         # We introduce intermediate nodes which count how many components have been turned on so far
         # Pass messages up
-        intermed = [array([minp[0], prob[0]])]
-        for i in range(1,self.D-1):  # [1, 2, ..., D-2]
-            message = convolve(intermed[-1], [minp[i], prob[i]])[:self.C+1]
+        messages = self.pass_messages_up(prob)
+        # Pass messages down
+        return self.pass_messages_down(prob, messages)
+    
+    def pass_messages_up(self, prob):
+        """
+        Pass messages for belief propagation from individual components to the cardinality potential
+        :param prob: non-sparse probabilities of each component
+        :return: cardinality probabilities for successive subsets of components
+        """
+        first_message = zeros(self.C+1)
+        first_message[0] = 1-prob[0]
+        first_message[1] = prob[0]
+        intermed = [first_message]
+        # Note! This loop is a bottleneck, because it's done in Python rather than NumPy.
+        # (We call this function often enough that it matters)
+        # It would be faster for this loop to be done in C...
+        for p in prob[1:-1]:  # [1, 2, ..., D-2]
+            message = self.convolve(intermed[-1], p)
             intermed.append(message)
-        
+        return intermed
+    
+    def convolve(self, prev, p):
+        """
+        Convolve prev with (p,1-p), truncated to length self.C+1
+        (Faster than numpy.convolve for this case)
+        :param prev: probabilities [P(0),...,P(C)]
+        :param p: probability of the next component
+        :return: the next probabilities
+        """
+        result = prev * (1-p)
+        result[1:] += prev[:-1] * p
+        return result
+    
+    def pass_messages_down(self, prob, intermed):
+        """
+        Sample a vector, using the cardinality probabilities
+        :param prob: non-sparse probabilities of each component
+        :param intermed: cardinality probabilities for successive subsets of components
+        :return: a sampled vector
+        """
         # Fix total number of components, and pass messages down
-        vec = zeros(self.D, dtype=bool_)  # Output vector
+        vec = empty(self.D, dtype=bool_)  # Output vector
         aux = self.C  # Number of components still to come
         # Iteratively sample
         for i in range(self.D-1, -1, -1):  # [D-1, D-2, ..., 0] 
             if aux == i+1:  # All remaining components are on
-                vec[:i+1] = 1
+                vec[:i+1] = 1  # [0, ..., i]
                 break
             elif aux == 0:  # All remaining components are off
                 vec[:i+1] = 0
+                break
             else:
                 # Unnormalised probabilities of being on or off:
-                ein = prob[i] * intermed[i-1][aux-1]
-                aus = minp[i] * intermed[i-1][aux]
+                p = prob[i]
+                ein = p * intermed[i-1][aux-1]
+                aus = (1-p) * intermed[i-1][aux]
                 if ein == 0 and aus == 0:
                     print(prob)
-                    print(minp)
                     print(intermed)
                     print(i, aux)
                     raise Exception('div zero!')
                 # Probability of being on:
                 on = ein/(ein+aus)
-                if on < 0 or on > 1:
-                    raise Exception('not prob')
                 # Random sample:
                 if random.binomial(1, on):
                     # Update vector and count
                     vec[i] = 1
                     aux -= 1
+                else:
+                    # Update vector
+                    vec[i] = 0
         return vec
     
     def propose_ent(self, ent):
@@ -167,7 +206,7 @@ class SemFuncModel():
                 else:
                     off += 1
         # Propose new entity
-        new_ent = array(ent)
+        new_ent = array(ent)  # returns a copy
         new_ent[old_i] = 0
         new_ent[new_i] = 1
         

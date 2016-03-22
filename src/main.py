@@ -101,6 +101,12 @@ trainer = DirectTrainer(setup, nodes, particle,
 print("Set up complete, beginning training...")
 sys.stdout.flush()
 
+"""
 trainer.train(epochs = 100,
               minibatch = 20,
               print_every = 1)
+"""
+
+
+import cProfile
+cProfile.runctx('trainer.train(1, 20, 1)',globals(),locals())
