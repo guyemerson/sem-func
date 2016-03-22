@@ -1,7 +1,8 @@
 import sys, os, pickle, numpy
 from collections import Counter
 
-from model import SemFuncModel, DirectTrainingSetup, DirectTrainer
+from model import DirectTrainingSetup, DirectTrainer, \
+    SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 
 numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
@@ -15,21 +16,22 @@ preds = sorted(pred_count.keys(), key=str)
 links = ('ARG1','ARG2')
 pred_freq = [pred_count[p] for p in preds]
 
-model = SemFuncModel(preds, links, pred_freq,
-                     dims = 50,
-                     card = 5,
-                     init_bias = 5,
-                     init_card = 8,
-                     init_range = 1)
+model = SemFuncModel_FactorisedPreds(preds, links, pred_freq,
+                                      dims = 50,
+                                      card = 5,
+                                      embed_dims = 20, 
+                                      init_bias = 5,
+                                      init_card = 8,
+                                      init_range = 1)
 
 setup = DirectTrainingSetup(model,
-                            rate = 0.1,
+                            rate = 0.01,
                             rate_ratio = 1,
-                            l2 = 0.00001,
-                            l2_ratio = 0.01,
+                            l2 = 0.001,
+                            l2_ratio = 100,
                             l1 = 0.000001,
                             l1_ratio = 1,
-                            ent_steps = 2,
+                            ent_steps = 3,
                             pred_steps = 2)
 
 pred_index = {p:i for i,p in enumerate(preds)}
@@ -73,11 +75,13 @@ agent_only = len(data) - n_patient
 patient_only = len(data) - n_agent
 total = full + agent_only + patient_only
 
-N_PART = 20
+N_PART = 5
 
 p_full = round(full * N_PART / total)
 p_agent = round(agent_only * N_PART / total)
 p_patient = round(patient_only * N_PART / total)
+
+print(p_full, p_agent, p_patient)
 
 particle = []
 nid = 0
@@ -101,12 +105,12 @@ trainer = DirectTrainer(setup, nodes, particle,
 print("Set up complete, beginning training...")
 sys.stdout.flush()
 
-"""
+
 trainer.train(epochs = 100,
               minibatch = 20,
               print_every = 1)
+
 """
-
-
 import cProfile
 cProfile.runctx('trainer.train(1, 20, 1)',globals(),locals())
+"""

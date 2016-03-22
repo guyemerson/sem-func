@@ -1,5 +1,5 @@
 from math import sqrt, exp
-from numpy import array, random, dot, zeros, zeros_like, outer, arange, amax, bool_, empty, histogram, count_nonzero, inf
+from numpy import array, random, dot, zeros, zeros_like, outer, arange, amax, argmax, unravel_index, bool_, empty, histogram, count_nonzero, inf
 import pickle
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -9,52 +9,8 @@ class SemFuncModel():
     """
     The core semantic function model, including the background distribution
     """
-    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0):
-        """
-        Initialise the model
-        :param preds: names of predicates
-        :param links: names of links
-        :param freq: frequency of each predicate
-        :param dims: dimension of latent entities
-        :param card: cardinality of latent entities
-        :param init_bias: (optional) initial bias for calculating semantic function values
-        :param init_card: (optional) approximate cardinality for initialising pred weights
-        :param init_range: (optional) range for initialising pred weights
-        """
-        # Names for human readability
-        self.pred_name = preds
-        self.link_name = links
-        # Fixed parameters
-        if isinstance(freq, list):
-            freq = array(freq)
-        self.freq = freq / sum(freq)
-        assert len(freq) == len(preds)
-        # Constants
-        self.D = dims
-        self.V = len(preds)
-        self.L = len(links)
-        self.C = card
-        # Trained weights
-        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
-        if init_card is None: init_card = dims
-        self.pred_wei = random.uniform(0, init_range, (self.V, self.D)) \
-                      * random.binomial(1, init_card / dims, (self.V, self.D))
-        self.pred_bias = empty((self.V,))
-        self.pred_bias[:] = init_bias
-        
-        self.link_weights = [self.link_wei]
-        self.pred_weights = [self.pred_wei,
-                             self.pred_bias]
-        
-        self.bias_weights = [self.pred_bias]
-        self.normal_weights=[self.link_wei,
-                             self.pred_wei]
-        # For sampling:
-        self.calc_av_pred()  # average predicate
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):
-            pred_toks.extend([i]*f)
-        self.pred_tokens = array(pred_toks)
+    def __init__(self, *arg, **kwargs):
+        raise NotImplementedError
     
     # Semantic functions
     
@@ -65,7 +21,7 @@ class SemFuncModel():
         :param pred: a predicate
         :return: a probability
         """
-        return expit(dot(ent, self.pred_wei[pred]) - self.pred_bias[pred])
+        raise NotImplementedError
     
     # Sampling
     
@@ -87,7 +43,9 @@ class SemFuncModel():
             # 0th axis of link_wei[label]
             negenergy += dot(in_vectors[i], self.link_wei[label])
         # Expit gives the probability of each component if there are no sparsity constraints
-        p = expit(negenergy) # Warning! If the negenergy is above 710, expit returns nan
+        p = expit(negenergy)
+        # Warning! If the negenergy is above 710, expit returns nan
+        # Warning! If the negenergy is above e.g. 15 for 50 units, we may get underflow 
         return self.sample_card_restr(p)
         
     def sample_card_restr(self, prob):
@@ -271,8 +229,7 @@ class SemFuncModel():
         Recalculate the average predicate
         (used as an approximation in conditional sampling)
         """
-        # Weighted sum of predicates
-        self.av_pred = dot(self.freq, self.pred_wei)
+        raise NotImplementedError
     
     def resample_pred(self, vector, old_pred):
         """
@@ -303,7 +260,7 @@ class SemFuncModel():
         :param out_labels: an iterable of link labels
         :param out_vectors: an iterable of entity vectors
         :param matrices: (optional) the matrices which gradients should be added to
-        :return: matrices of gradients
+        :return: gradient matrices
         """
         # Initialise a matrix if not given one
         if matrices is None:
@@ -321,16 +278,9 @@ class SemFuncModel():
         :param vector: an entity vector
         :param pred: a predicate
         :param matrices: (optional) the weight matrix which gradients should be added to
-        :return: gradient matrices, sliced for the predicate (not the whole matrices!)
+        :return: gradient matrices
         """
-        factor = 1 - self.prob(vector, pred)
-        grad_vector = vector * factor
-        bias_grad = - factor  # all biases assumed to be negative
-        if matrices is not None:
-            gradient_matrix, bias_gradient_vector = matrices
-            gradient_matrix[pred] += grad_vector
-            bias_gradient_vector[pred] += bias_grad
-        return grad_vector, bias_grad
+        raise NotImplementedError
     
     def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_matrices=None, pred_matrices=None):
         """
@@ -343,35 +293,28 @@ class SemFuncModel():
         :param out_vectors: an iterable of entity vectors
         :param link_matrices: (optional) the matrices which link gradients should be added to
         :param pred_matrices: (optional) the matrices which pred gradients should be added to
-        :return: gradient matrices
+        :return: link gradient matrices, pred gradient matrices
         """
         # Initialise matrices if not given
         if link_matrices is None:
-            link_grad_matrix = zeros_like(self.link_wei)
-        else:
-            link_grad_matrix, = link_matrices
-        
+            link_matrices = [zeros_like(m) for m in self.link_weights]
         if pred_matrices is None:
-            pred_grad_matrix = zeros_like(self.pred_wei)
-            pred_bias_grad_vector = zeros_like(self.pred_bias)
-        else:
-            pred_grad_matrix, \
-            pred_bias_grad_vector = pred_matrices
+            pred_matrices = [zeros_like(m) for m in self.pred_weights]
         # Add gradients...
         # ...from links:
-        self.observe_out_links(vector, out_labels, out_vectors, (link_grad_matrix,))
+        self.observe_out_links(vector, out_labels, out_vectors, link_matrices)
         # ...from the pred:
-        self.observe_pred(vector, pred, (pred_grad_matrix, pred_bias_grad_vector))
+        self.observe_pred(vector, pred, pred_matrices)
         # ...from the negative preds:
         num_preds = neg_preds.shape[0]
+        neg_pred_matrices = [zeros_like(m) for m in self.pred_weights]
         for p in neg_preds:
-            grad_vec, bias_grad = self.observe_pred(vector, p)
-            grad_vec /= num_preds
-            bias_grad /= num_preds
-            pred_grad_matrix[p] -= grad_vec
-            pred_bias_grad_vector[p] -= bias_grad
+            self.observe_pred(vector, p, neg_pred_matrices)
+        for i, grad in enumerate(neg_pred_matrices):
+            grad /= num_preds
+            pred_matrices[i] -= grad
         # Return gradient matrices
-        return link_grad_matrix, pred_grad_matrix, pred_bias_grad_vector
+        return link_matrices, pred_matrices
     
     # Testing functions
     
@@ -386,9 +329,7 @@ class SemFuncModel():
         # Add energy from each link
         for l in links:
             # This also allows overloading of pydmrs Link objects
-            start = l[0]
-            end = l[1]
-            label = l[2]
+            start, end, label = l[:3]
             e -= dot(dot(self.link_wei[label],
                          ents[end]),
                      ents[start])
@@ -402,8 +343,7 @@ class SemFuncModel():
         :param pred2: a predicate
         :return: the distance
         """
-        return cosine(self.pred_wei[pred1],
-                      self.pred_wei[pred2])
+        raise NotImplementedError
     
     def sample_from_pred(self, pred, samples=5, burnin=5, interval=2, chosen=True):
         """
@@ -478,40 +418,240 @@ class SemFuncModel():
         :param high: (default 0.8) the maximum non-sparse probability of each component
         :return: the vector
         """
+        raise NotImplementedError
+
+
+class SemFuncModel_IndependentPreds(SemFuncModel):
+    """
+    SemFuncModel with independent parameters for each predicate
+    """
+    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0):
+        """
+        Initialise the model
+        :param preds: names of predicates
+        :param links: names of links
+        :param freq: frequency of each predicate
+        :param dims: dimension of latent entities
+        :param card: cardinality of latent entities
+        :param init_bias: (optional) initial bias for calculating semantic function values
+        :param init_card: (optional) approximate cardinality for initialising pred weights
+        :param init_range: (optional) range for initialising pred weights
+        """
+        # Names for human readability
+        self.pred_name = preds
+        self.link_name = links
+        # Fixed parameters
+        if isinstance(freq, list):
+            freq = array(freq)
+        self.freq = freq / sum(freq)
+        assert len(freq) == len(preds)
+        # Constants
+        self.D = dims
+        self.V = len(preds)
+        self.L = len(links)
+        self.C = card
+        # Trained weights
+        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
+        if init_card is None: init_card = dims
+        self.pred_wei = random.uniform(0, init_range, (self.V, self.D)) \
+                      * random.binomial(1, init_card / dims, (self.V, self.D))
+        self.pred_bias = empty((self.V,))
+        self.pred_bias[:] = init_bias
+        
+        self.link_weights = [self.link_wei]
+        self.pred_local_weights = [self.pred_wei,
+                                   self.pred_bias]
+        self.pred_global_weights= []
+        self.pred_weights = self.pred_local_weights + self.pred_global_weights
+        
+        self.bias_weights = [self.pred_bias]
+        self.normal_weights=[self.link_wei,
+                             self.pred_wei]
+        # For sampling:
+        self.calc_av_pred()  # average predicate
+        pred_toks = []  # fill with pred tokens, for sampling preds
+        for i, f in enumerate(freq):
+            pred_toks.extend([i]*f)
+        self.pred_tokens = array(pred_toks)
+    
+    def prob(self, ent, pred):
+        """
+        Calculate the probability of a predicate being true of an entity
+        :param ent: an entity vector
+        :param pred: a predicate
+        :return: a probability
+        """
+        return expit(dot(ent, self.pred_wei[pred]) - self.pred_bias[pred])
+    
+    def calc_av_pred(self):
+        """
+        Recalculate the average predicate
+        (used as an approximation in conditional sampling)
+        """
+        # Weighted sum of predicates
+        self.av_pred = dot(self.freq, self.pred_wei)
+    
+    def observe_pred(self, vector, pred, matrices=None):
+        """
+        Calculate pred weight gradients for a node
+        :param vector: an entity vector
+        :param pred: a predicate
+        :param matrices: (optional) the weight matrix which gradients should be added to
+        :return: gradient matrices
+        """
+        # Initialise matrices if not given
+        if matrices is None:
+            matrices = [zeros_like(m) for m in self.pred_weights]
+        # Unpack matrices
+        gradient_matrix, bias_gradient_vector = matrices
+        # Calculate gradients
+        factor = 1 - self.prob(vector, pred)
+        gradient_matrix[pred] += vector * factor
+        bias_gradient_vector[pred] += - factor  # all biases assumed to be negative
+        return matrices
+    
+    def cosine_of_parameters(self, pred1, pred2):
+        """
+        Calculate the cosine distance (1 - normalised dot product)
+        between the weights for a pair of predicates
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :return: the distance
+        """
+        return cosine(self.pred_wei[pred1],
+                      self.pred_wei[pred2])
+    
+    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
+        """
+        Initialise an entity vector from a pred
+        :param pred: a predicate
+        :param low: (default 0.01) the minimum non-sparse probability of each component
+        :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
         prob = self.pred_wei[pred].clip(low, high)
         return self.sample_card_restr(prob)
-    
 
-class WrappedVectors():
+
+class SemFuncModel_FactorisedPreds(SemFuncModel):
     """
-    Access vectors according to different indices.
+    SemFuncModel with factorised pred parameters
     """
-    def __init__(self, matrix, index):
+    def __init__(self, preds, links, freq, dims, card, embed_dims, init_bias=0, init_card=None, init_range=0):
         """
-        Initialise the object
-        :param matrix: a numpy matrix
-        :param index: a dict mapping from desired keys to numpy indices
+        Initialise the model
+        :param preds: names of predicates
+        :param links: names of links
+        :param freq: frequency of each predicate
+        :param dims: dimension of latent entities
+        :param card: cardinality of latent entities
+        :param embed_dims: dimension of pred embeddings
+        :param init_bias: (optional) initial bias for calculating semantic function values
+        :param init_card: (optional) approximate cardinality for initialising pred weights
+        :param init_range: (optional) range for initialising pred weights
         """
-        self.matrix = matrix
-        self.index = index
+        # Names for human readability
+        self.pred_name = preds
+        self.link_name = links
+        # Fixed parameters
+        if isinstance(freq, list):
+            freq = array(freq)
+        self.freq = freq / sum(freq)
+        assert len(freq) == len(preds)
+        # Constants
+        self.D = dims
+        self.V = len(preds)
+        self.L = len(links)
+        self.C = card
+        self.E = embed_dims
+        # Trained weights
+        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
+        if init_card is None: init_card = dims
+        self.pred_embed = random.uniform(0, init_range, (self.V, self.E)) \
+                        * random.binomial(1, init_card / dims, (self.V, self.E))
+        self.pred_factor = random.uniform(0, init_range, (self.E, self.D)) \
+                         * random.binomial(1, init_card / dims, (self.E, self.D))
+        self.pred_bias = empty((self.V,))
+        self.pred_bias[:] = init_bias
+        
+        self.link_weights = [self.link_wei]
+        self.pred_local_weights = [self.pred_embed,
+                                   self.pred_bias]
+        self.pred_global_weights= [self.pred_factor]
+        self.pred_weights = self.pred_local_weights + self.pred_global_weights
+        
+        self.bias_weights = [self.pred_bias]
+        self.normal_weights=[self.link_wei,
+                             self.pred_embed,
+                             self.pred_factor]
+        # For sampling:
+        self.calc_av_pred()  # average predicate
+        pred_toks = []  # fill with pred tokens, for sampling preds
+        for i, f in enumerate(freq):
+            pred_toks.extend([i]*f)
+        self.pred_tokens = array(pred_toks)
     
-    def __getitem__(self, key):
+    def prob(self, ent, pred):
         """
-        Get an item
-        :param key: 2-tuple (vector index, numpy index)
-        :return: what numpy would return 
+        Calculate the probability of a predicate being true of an entity
+        :param ent: an entity vector
+        :param pred: a predicate
+        :return: a probability
         """
-        return self.matrix[self.index[key[0]], key[1]]
+        pred_wei = dot(self.pred_embed[pred], self.pred_factor)
+        return expit(dot(ent, pred_wei) - self.pred_bias[pred])
     
-    def __setitem__(self, key, value):
+    def calc_av_pred(self):
         """
-        Set an item
-        :param key: 2-tuple (vector index, numpy index)
-        :param value: the new value
+        Recalculate the average predicate
+        (used as an approximation in conditional sampling)
         """
-        self.matrix[self.index[key[0]], key[1]] = value
-
-
+        # Weighted sum of predicates
+        av_embed = dot(self.freq, self.pred_embed)
+        self.av_pred = dot(av_embed, self.pred_factor)
+    
+    def observe_pred(self, vector, pred, matrices=None):
+        """
+        Calculate pred weight gradients for a node
+        :param vector: an entity vector
+        :param pred: a predicate
+        :param matrices: (optional) the weight matrix which gradients should be added to
+        :return: gradient matrices
+        """
+        # Initialise matrices if not given
+        if matrices is None:
+            matrices = [zeros_like(m) for m in self.pred_weights]
+        # Unpack matrices
+        gradient_embed, gradient_bias, gradient_factor = matrices
+        # Calculate gradients
+        factor = 1 - self.prob(vector, pred)
+        gradient_embed[pred] += factor * dot(self.pred_factor, vector)
+        gradient_factor += outer(self.pred_embed[pred], vector)
+        gradient_bias[pred] += - factor  # all biases assumed to be negative
+        return matrices
+    
+    def cosine_of_parameters(self, pred1, pred2):
+        """
+        Calculate the cosine distance (1 - normalised dot product)
+        between the weights for a pair of predicates
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :return: the distance
+        """
+        return cosine(dot(self.pred_embed[pred1], self.pred_factor),
+                      dot(self.pred_embed[pred2], self.pred_factor))
+    
+    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
+        """
+        Initialise an entity vector from a pred
+        :param pred: a predicate
+        :param low: (default 0.01) the minimum non-sparse probability of each component
+        :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
+        prob = dot(self.pred_embed[pred], self.pred_factor).clip(low, high)
+        return self.sample_card_restr(prob)
+    
 
 # Converting pydmrs data to form required by SemFuncModel
 
@@ -584,6 +724,8 @@ class DirectTrainingSetup():
         self.model = model
         self.link_weights = model.link_weights  # list of link weight tensors
         self.pred_weights = model.pred_weights  # list of pred weight tensors
+        self.pred_local_weights = model.pred_local_weights
+        self.pred_global_weights = model.pred_global_weights
         self.all_weights = self.link_weights + self.pred_weights  # all weights
         # Hyperparameters
         self.rate_link = rate / sqrt(rate_ratio)
@@ -595,11 +737,6 @@ class DirectTrainingSetup():
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
-        '''
-        # Moving average of squared gradients...
-        self.link_sumsq = zeros_like(self.link_wei)
-        self.pred_sumsq = zeros_like(self.pred_wei)
-        '''
     
     # Batch resampling
     
@@ -697,13 +834,16 @@ class DirectTrainingSetup():
         for wei in self.link_weights:
             wei *= self.L2_link
             wei -= self.L1_link
+        for wei in self.pred_global_weights:
+            wei *= self.L2_pred
+            wei -= self.L1_pred
         if pred_list:
-            for wei in self.pred_weights:
+            for wei in self.pred_local_weights:
                 for p in pred_list:
                     wei[p] *= self.L2_pred
                     wei[p] -= self.L1_pred
         else:
-            for wei in self.pred_weights:
+            for wei in self.pred_local_weights:
                 wei *= self.L2_pred
                 wei -= self.L1_pred
         
@@ -885,9 +1025,13 @@ class DirectTrainer():
                 print('max link weights:')
                 for m in self.model.link_weights:
                     print('\t', amax(m))
-                print('max pred weights:')
-                for m in self.model.pred_weights:
+                print('max global pred weights:')
+                for m in self.model.pred_global_weights:
                     print('\t', amax(m))
+                print('max local pred weights:')
+                for m in self.model.pred_local_weights:
+                    i_max = unravel_index(argmax(m), m.shape)
+                    print('\t', m[i_max], '\t', self.model.pred_name[i_max[0]])
                 print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
                 print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
                 print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
