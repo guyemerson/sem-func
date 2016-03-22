@@ -41,6 +41,14 @@ class SemFuncModel():
                       * random.binomial(1, init_card / dims, (self.V, self.D))
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
+        
+        self.link_weights = [self.link_wei]
+        self.pred_weights = [self.pred_wei,
+                             self.pred_bias]
+        
+        self.bias_weights = [self.pred_bias]
+        self.normal_weights=[self.link_wei,
+                             self.pred_wei]
         # For sampling:
         self.calc_av_pred()  # average predicate
         pred_toks = []  # fill with pred tokens, for sampling preds
@@ -57,7 +65,7 @@ class SemFuncModel():
         :param pred: a predicate
         :return: a probability
         """
-        return expit(dot(ent, self.pred_wei[pred]) + self.pred_bias[pred])
+        return expit(dot(ent, self.pred_wei[pred]) - self.pred_bias[pred])
     
     # Sampling
     
@@ -132,7 +140,51 @@ class SemFuncModel():
                     aux -= 1
         return vec
     
-    def resample_conditional(self, old_ent, pred, out_labels, out_vectors, in_labels, in_vectors):
+    def propose_ent(self, ent):
+        """
+        Propose a Metropolis-Hastings step, by switching on component on and one off
+        :param ent: the current entity vector
+        :return: a new entity vector, the component switched off, and the component switched on
+        """
+        # Pick an on and an off unit to switch
+        old_jth = random.randint(self.C)
+        new_jth = random.randint(self.D-self.C)
+        # Find these units
+        on = 0
+        for i, val in enumerate(ent):
+            if val:
+                if on == old_jth:
+                    old_i = i
+                    break
+                else:
+                    on += 1
+        off = 0
+        for i, val in enumerate(ent):
+            if not val:
+                if off == new_jth:
+                    new_i = i
+                    break
+                else:
+                    off += 1
+        # Propose new entity
+        new_ent = array(ent)
+        new_ent[old_i] = 0
+        new_ent[new_i] = 1
+        
+        return new_ent, old_i, new_i
+    
+    def metro_switch(self, ratio):
+        """
+        Stochastically decide whether or not to make a Metropolis-Hastings step
+        :param ratio: the ratio of probabilities
+        :return: True or False, whether to switch
+        """
+        if ratio > 1:
+            return True
+        else:
+            return random.binomial(1, ratio)
+    
+    def resample_conditional(self, old_ent, pred, out_labels, out_vectors, in_labels, in_vectors, chosen=True):
         """
         Resample a latent entity, given a predicate and links to other entities.
         Uses Metropolis-Hastings, potentially turning one component on and one off.
@@ -142,32 +194,11 @@ class SemFuncModel():
         :param out_vectors: an iterable of entity vectors
         :param in_labels: an iterable of link labels
         :param in_vectors: an iterable of entity vectors
+        :param chosen: (default True) if we should condition on the pred being chosen, or just being true
         :return: a sampled entity vector (changed in place!)
         """
-        # Pick an on and an off unit to switch
-        old_jth = random.randint(self.C)
-        new_jth = random.randint(self.D-self.C)
-        # Find these units
-        on = 0
-        for i, val in enumerate(old_ent):
-            if val:
-                if on == old_jth:
-                    old_i = i
-                    break
-                else:
-                    on += 1
-        off = 0
-        for i, val in enumerate(old_ent):
-            if not val:
-                if off == new_jth:
-                    new_i = i
-                    break
-                else:
-                    off += 1
-        # Propose new entity
-        new_ent = array(old_ent)
-        new_ent[old_i] = 0
-        new_ent[new_i] = 1
+        # Get a new entity proposal
+        new_ent, old_i, new_i = self.propose_ent(old_ent)
         
         # Calculate Metropolis-Hastings ratio
         # First, probability of each predicate being applicable:
@@ -182,28 +213,18 @@ class SemFuncModel():
             negenergy += dot(self.link_wei[label, :, new_i], in_vectors[n])
             negenergy -= dot(self.link_wei[label, :, old_i], in_vectors[n])
         
-        # Finally, weighted number of other predicates that are true:
-        # (Use an approximation...)
-        negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])
+        if chosen:
+            # Finally, weighted number of other predicates that are true:
+            # (Use an approximation, rather than summing over all predicates...)
+            negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])
         
         ratio *= exp(negenergy)
         
-        """
-        # Exact number of other predicates... slow!
-        ratio /= sum(self.freq[i] * self.prob(new_ent, i) for i in range(self.V))
-        ratio *= sum(self.freq[i] * self.prob(old_ent, i) for i in range(self.V))
-        """
-        
-        # Decide whether to accept or reject the new entity
-        if ratio > 1:
-            switch = True
-        else:
-            switch = random.binomial(1, ratio)
-        
         # Change the vector accordingly
-        if switch:
+        if self.metro_switch(ratio):
             old_ent[old_i] = 0
             old_ent[new_i] = 1
+        
         return old_ent
     
     def calc_av_pred(self):
@@ -227,80 +248,81 @@ class SemFuncModel():
         # Metropolis-Hastings ratio
         ratio = self.freq[new_pred] * self.prob(vector, new_pred) \
               /(self.freq[old_pred] * self.prob(vector, old_pred))
-        # Decide whether to switch
-        if ratio > 1:
-            switch = True
-        else:
-            switch = random.binomial(1, ratio)
         # Return corresponding pred
-        if switch:
+        if self.metro_switch(ratio):
             return new_pred
         else:
             return old_pred
     
     # Gradients
     
-    def observe_out_links(self, vector, out_labels, out_vectors, gradient_matrix=None):
+    def observe_out_links(self, vector, out_labels, out_vectors, matrices=None):
         """
         Calculate link weight gradients for the outgoing links of a node
         (the gradients for incoming links will be found when considering the other node)
         :param vector: an entity vector
         :param out_labels: an iterable of link labels
         :param out_vectors: an iterable of entity vectors
-        :param gradient_matrix: (optional) the matrix which gradients should be added to
-        :return: a matrix of gradients
+        :param matrices: (optional) the matrices which gradients should be added to
+        :return: matrices of gradients
         """
         # Initialise a matrix if not given one
-        if gradient_matrix is None:
+        if matrices is None:
             gradient_matrix = zeros_like(self.link_wei)
+        else:
+            gradient_matrix, = matrices
         # Calculate gradient for each link
         for i, label in enumerate(out_labels):
             gradient_matrix[label] += outer(vector, out_vectors[i])
-        return gradient_matrix
+        return gradient_matrix,
     
-    def observe_pred(self, vector, pred, gradient_matrix=None, bias_gradient_vector=None):
+    def observe_pred(self, vector, pred, matrices=None):
         """
         Calculate pred weight gradients for a node
         :param vector: an entity vector
         :param pred: a predicate
-        :param gradient_matrix: (optional) the matrix which gradients should be added to
-        :param bias_gradient_vector: (optional) the vector which bias gradients should be added to
-        :return: a vector of gradients (not the whole matrix!), and the bias gradient
+        :param matrices: (optional) the weight matrix which gradients should be added to
+        :return: gradient matrices, sliced for the predicate (not the whole matrices!)
         """
         factor = 1 - self.prob(vector, pred)
         grad_vector = vector * factor
-        bias_grad = factor
-        if gradient_matrix is not None:
+        bias_grad = - factor  # all biases assumed to be negative
+        if matrices is not None:
+            gradient_matrix, bias_gradient_vector = matrices
             gradient_matrix[pred] += grad_vector
-        if bias_gradient_vector is not None:
             bias_gradient_vector[pred] += bias_grad
         return grad_vector, bias_grad
     
-    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_grad_matrix=None, pred_grad_matrix=None, pred_bias_grad_vector=None):
+    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_matrices=None, pred_matrices=None):
         """
         Calculate multiple gradients for a node
+        (the gradients for incoming links will be found when considering the other node)
         :param vector: an entity vector
         :param pred: a predicate
         :param neg_preds: an iterable of predicates
         :param out_labels: an iterable of link labels
         :param out_vectors: an iterable of entity vectors
-        :param link_grad_matrix: (optional) the matrix which link weight gradients should be added to
-        :param pred_grad_matrix: (optional) the matrix which pred weight gradients should be added to
-        :param pred_bias_grad_vector: (optional) the vector which pred bias gradients should be added to
-        :return: link gradient matrix, pred gradient matrix, pred bias gradient vector
+        :param link_matrices: (optional) the matrices which link gradients should be added to
+        :param pred_matrices: (optional) the matrices which pred gradients should be added to
+        :return: gradient matrices
         """
         # Initialise matrices if not given
-        if link_grad_matrix is None:
+        if link_matrices is None:
             link_grad_matrix = zeros_like(self.link_wei)
-        if pred_grad_matrix is None:
+        else:
+            link_grad_matrix, = link_matrices
+        
+        if pred_matrices is None:
             pred_grad_matrix = zeros_like(self.pred_wei)
-        if pred_bias_grad_vector is None:
             pred_bias_grad_vector = zeros_like(self.pred_bias)
+        else:
+            pred_grad_matrix, \
+            pred_bias_grad_vector = pred_matrices
         # Add gradients...
         # ...from links:
-        self.observe_out_links(vector, out_labels, out_vectors, link_grad_matrix)
+        self.observe_out_links(vector, out_labels, out_vectors, (link_grad_matrix,))
         # ...from the pred:
-        self.observe_pred(vector, pred, pred_grad_matrix, pred_bias_grad_vector)
+        self.observe_pred(vector, pred, (pred_grad_matrix, pred_bias_grad_vector))
         # ...from the negative preds:
         num_preds = neg_preds.shape[0]
         for p in neg_preds:
@@ -344,35 +366,37 @@ class SemFuncModel():
         return cosine(self.pred_wei[pred1],
                       self.pred_wei[pred2])
     
-    def sample_from_pred(self, pred, samples=5, burnin=5, interval=2):
+    def sample_from_pred(self, pred, samples=5, burnin=5, interval=2, chosen=True):
         """
         Sample entity vectors conditioned on a predicate
         :param pred: a predicate
         :param samples: (default 5) number of samples to average over
         :param burnin: (default 5) number of samples to skip before averaging starts
         :param interval: (default 2) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: a generator of entity vectors
         """
         v = self.init_vec_from_pred(pred)
         for _ in range(max(0, burnin-interval)):
-            self.resample_conditional(v, pred, (),(),(),())
+            self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
         for _ in range(samples):
             for _ in range(interval):
-                self.resample_conditional(v, pred, (),(),(),())
+                self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
             yield v.copy()
     
-    def mean_sample_from_pred(self, pred, samples=5, burnin=5, interval=2):
+    def mean_sample_from_pred(self, pred, samples=5, burnin=5, interval=2, chosen=True):
         """
         Sample entity vectors conditioned on a predicate, and average them
         :param pred: a predicate
         :param samples: (default 5) number of samples to average over
         :param burnin: (default 5) number of samples to skip before averaging starts
         :param interval: (default 2) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: the mean entity vector
         """
-        return sum(self.sample_from_pred(pred, samples=samples, burnin=burnin, interval=interval)) / samples
+        return sum(self.sample_from_pred(pred, samples=samples, burnin=burnin, interval=interval, chosen=chosen)) / samples
     
-    def cosine_samples(self, pred1, pred2, samples=5, burnin=5, interval=2):
+    def cosine_of_samples(self, pred1, pred2, samples=5, burnin=5, interval=2, chosen=True):
         """
         Calculate the average cosine distance (1 - normalised dot product)
         between sampled entity vectors conditioned on a pair of predicates
@@ -381,16 +405,17 @@ class SemFuncModel():
         :param samples: (default 5) number of samples to average over
         :param burnin: (default 5) number of samples to skip before averaging starts
         :param interval: (default 2) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: the cosine distance
         """
         # As dot products are distributive over addition, we can take the dot product of the sums
-        mean1 = self.mean_sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval)
-        mean2 = self.mean_sample_from_pred(pred2, samples=samples, burnin=burnin, interval=interval)
+        mean1 = self.mean_sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval, chosen=chosen)
+        mean2 = self.mean_sample_from_pred(pred2, samples=samples, burnin=burnin, interval=interval, chosen=chosen)
         return cosine(mean1, mean2)
     
     def implies(self, pred1, pred2, samples=5, burnin=5, interval=2):
         """
-        Calculate the probability that pred1 implies pred2
+        Calculate the probability that the truth of pred1 implies the truth of pred2
         :param pred1: a predicate
         :param pred2: a predicate
         :param samples: (default 5) number of samples to average over
@@ -399,7 +424,7 @@ class SemFuncModel():
         :return: the probability pred1 implies pred2
         """
         total = 0
-        ents = self.sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval)
+        ents = self.sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval, chosen=False)
         for v in ents:
             total += self.prob(v, pred2)
         return total/samples
@@ -518,9 +543,9 @@ class DirectTrainingSetup():
         """
         # Semantic function model
         self.model = model
-        self.link_wei = model.link_wei
-        self.pred_wei = model.pred_wei
-        self.pred_bias = model.pred_bias
+        self.link_weights = model.link_weights  # list of link weight tensors
+        self.pred_weights = model.pred_weights  # list of pred weight tensors
+        self.all_weights = self.link_weights + self.pred_weights  # all weights
         # Hyperparameters
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
@@ -586,15 +611,15 @@ class DirectTrainingSetup():
         Calculate gradients for link weights, for a fantasy particle
         :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
         :param ents: a matrix of particle entity vectors  
-        :return: a gradient matrix
+        :return: gradient matrices
         """
-        gradient_matrix = zeros_like(self.link_wei)
+        gradient_matrices = [zeros_like(m) for m in self.link_weights]
         for nodeid, out_labs, out_ids, _, _ in batch:
             # For each node, add gradients from outgoing links
             vec = ents[nodeid]
             out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrix)
-        return gradient_matrix
+            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices)
+        return gradient_matrices
     
     def observe_latent_batch(self, batch, ents, neg_preds):
         """
@@ -602,51 +627,51 @@ class DirectTrainingSetup():
         :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
         :param ents: a matrix of latent entity vectors
         :param neg_preds: a matrix of negative samples of preds
-        :return: link gradient matrix, pred gradient matrix, pred bias gradient vector
+        :return: link gradient matrices, pred gradient matrices
         """
-        link_grad = zeros_like(self.link_wei)
-        pred_grad = zeros_like(self.pred_wei)
-        pred_bias_grad = zeros_like(self.pred_bias)
+        link_grads = [zeros_like(m) for m in self.link_weights]
+        pred_grads = [zeros_like(m) for m in self.pred_weights]
         for nodeid, pred, out_labs, out_ids, _, _ in batch:
             # For each node, add gradients
             vec = ents[nodeid]
             npreds = neg_preds[nodeid]
             out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grad, pred_grad, pred_bias_grad)
-        return link_grad, pred_grad, pred_bias_grad
+            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grads, pred_grads)
+        return link_grads, pred_grads
     
     # Gradient descent
     
-    def descend(self, link_gradient, pred_gradient, pred_bias_gradient, pred_list=None):
+    def descend(self, link_gradients, pred_gradients, pred_list=None):
         """
         Descend the gradient and apply regularisation
-        :param link_gradient: gradient for link weights
-        :param pred_gradient: gradient for pred weights
-        :param pred_bias_gradient: gradient for pred biases
+        :param link_gradients: gradients for link weights
+        :param pred_gradients: gradients for pred weights
         :param pred_list: (optional) restrict regularisation to these predicates
         """
         # Update from the gradient
-        self.link_wei += link_gradient
-        self.pred_wei += pred_gradient
-        self.pred_bias += pred_bias_gradient
+        for i, grad in enumerate(link_gradients):
+            self.link_weights[i] += grad
+        for i, grad in enumerate(pred_gradients):
+            self.pred_weights[i] += grad
+        
         # Apply regularisation
-        self.link_wei *= self.L2_link
-        self.link_wei -= self.L1_link
+        for wei in self.link_weights:
+            wei *= self.L2_link
+            wei -= self.L1_link
         if pred_list:
-            for p in pred_list:
-                self.pred_wei[p] *= self.L2_pred
-                self.pred_wei[p] -= self.L1_pred
-                self.pred_bias[p] *= self.L2_pred
-                self.pred_bias[p] += self.L1_pred
+            for wei in self.pred_weights:
+                for p in pred_list:
+                    wei[p] *= self.L2_pred
+                    wei[p] -= self.L1_pred
         else:
-            self.pred_wei *= self.L2_pred
-            self.pred_wei -= self.L1_pred
-            self.pred_bias *= self.L2_pred
-            self.pred_bias += self.L1_pred
+            for wei in self.pred_weights:
+                wei *= self.L2_pred
+                wei -= self.L1_pred
+        
         # Remove negative weights
-        self.link_wei.clip(0, out=self.link_wei)
-        self.pred_wei.clip(0, out=self.pred_wei)
-        self.pred_bias.clip(-inf, 0, out=self.pred_bias)
+        for wei in self.all_weights:
+            wei.clip(0, out=wei)
+        
         # Recalculate average predicate
         self.model.calc_av_pred()
     
@@ -669,19 +694,19 @@ class DirectTrainingSetup():
         self.resample_background_batch(neg_batch, neg_ents)
         
         # Observe gradients
-        link_del, pred_del, pred_bias_del = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
-        neg_link_del = self.observe_particle_batch(neg_batch, neg_ents)
+        link_dels, pred_dels, = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
+        neg_link_dels = self.observe_particle_batch(neg_batch, neg_ents)
         
         # Average gradients by batch size
         # (Note that this assumes positive and negative links are balanced)
-        pred_bias_del /= len(pos_batch)
-        pred_del /= len(pos_batch)
-        link_del /= len(pos_batch)
-        link_del -= neg_link_del / len(neg_batch)
+        for delta in link_dels + pred_dels:
+            delta /= len(pos_batch)
+        for i, delta in enumerate(neg_link_dels):
+            link_dels[i] -= delta / len(neg_batch)
         
         # Descend
         preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
-        self.descend(link_del, pred_del, pred_bias_del, preds)
+        self.descend(link_dels, pred_dels, preds)
     
     # Testing functions
     
@@ -779,13 +804,13 @@ class DirectTrainer():
         
         # Histogram bins, for printing
         num_bins = len(histogram_bins) + 2
-        histo = zeros((3, num_bins))
+        histo = zeros((len(self.model.normal_weights) + 1, num_bins))
         histo[0,1:-1] = histogram_bins
         histo[0,0] = 0
         histo[0,-1] = inf
         
         num_bins_bias = len(bias_histogram_bins) + 1
-        histo_bias = zeros((2, num_bins_bias))
+        histo_bias = zeros((len(self.model.bias_weights) + 1, num_bins_bias))
         histo_bias[0, :-1] = bias_histogram_bins
         histo_bias[0,-1] = inf
         
@@ -806,21 +831,26 @@ class DirectTrainer():
             if (e+1) % print_every == 0:
                 # Record training in the setup
                 self.setup.epochs += print_every
-                # Get histogram of weights
-                histo[1] = self.get_histogram(self.model.link_wei, histo[0,1:-1])
-                histo[2] = self.get_histogram(self.model.pred_wei, histo[0,1:-1])
-                histo_bias[1] = self.get_histogram_bias(-self.model.pred_bias, histo_bias[0, :-1])
+                # Get histograms of weights
+                for i in range(1, len(histo)):
+                    histo[i] = self.get_histogram(self.model.normal_weights[i-1], histo[0,1:-1])
+                for i in range(1, len(histo_bias)):
+                    histo_bias[i] = self.get_histogram_bias(self.model.bias_weights[i-1], histo_bias[0, :-1])
                 # Print to console
+                print()
                 print('Epoch {} complete!'.format(self.setup.epochs))
                 print('Weight histogram (link, then pred):')
                 print(histo)
                 print('Bias histogram (pred):')
                 print(histo_bias)
-                print('max link weight:', amax(self.model.link_wei))
-                print('max pred weight:', amax(self.model.pred_wei))
-                print('max  -pred bias:', amax(-self.model.pred_bias))
-                print('avg data back E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
-                print('avg part back E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
+                print('max link weights:')
+                for m in self.model.link_weights:
+                    print('\t', amax(m))
+                print('max pred weights:')
+                for m in self.model.pred_weights:
+                    print('\t', amax(m))
+                print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
+                print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
                 print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
                 print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)
                 # Save to file

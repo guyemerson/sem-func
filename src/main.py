@@ -18,19 +18,19 @@ pred_freq = [pred_count[p] for p in preds]
 model = SemFuncModel(preds, links, pred_freq,
                      dims = 50,
                      card = 5,
-                     init_bias = -5,
+                     init_bias = 5,
                      init_card = 8,
                      init_range = 1)
 
 setup = DirectTrainingSetup(model,
                             rate = 0.1,
                             rate_ratio = 1,
-                            l2 = 0.0001,
+                            l2 = 0.00001,
                             l2_ratio = 0.01,
                             l1 = 0.000001,
                             l1_ratio = 1,
-                            ent_steps = 1,
-                            pred_steps = 1)
+                            ent_steps = 2,
+                            pred_steps = 2)
 
 pred_index = {p:i for i,p in enumerate(preds)}
 
