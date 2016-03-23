@@ -262,14 +262,38 @@ class SemFuncModel():
         :param matrices: (optional) the matrices which gradients should be added to
         :return: gradient matrices
         """
-        # Initialise a matrix if not given one
+        # Initialise matrices if not given
         if matrices is None:
-            gradient_matrix = zeros_like(self.link_wei)
-        else:
-            gradient_matrix, = matrices
+            matrices = [zeros_like(m) for m in self.link_weights]
+        # Unpack matrices
+        gradient_matrix, = matrices
         # Calculate gradient for each link
         for i, label in enumerate(out_labels):
             gradient_matrix[label] += outer(vector, out_vectors[i])
+        return gradient_matrix,
+    
+    def observe_links(self, vector, out_labels, out_vectors, in_labels, in_vectors, matrices=None):
+        """
+        Calculate link weight gradients for the outgoing links of a node
+        (the gradients for incoming links will be found when considering the other node)
+        :param vector: an entity vector
+        :param out_labels: an iterable of link labels (outgoing)
+        :param out_vectors: an iterable of entity vectors (outgoing)
+        :param in_labels: an iterable of link labels (incoming)
+        :param in_vectors: an iterable of entity vectors (incoming)
+        :param matrices: (optional) the matrices which gradients should be added to
+        :return: gradient matrices
+        """
+        # Initialise matrices if not given
+        if matrices is None:
+            matrices = [zeros_like(m) for m in self.link_weights]
+        # Unpack matrices
+        gradient_matrix, = matrices
+        # Calculate gradient for each link
+        for i, label in enumerate(out_labels):
+            gradient_matrix[label] += outer(vector, out_vectors[i])
+        for i, label in enumerate(in_labels):
+            gradient_matrix[label] += outer(in_vectors[i], vector)
         return gradient_matrix,
     
     def observe_pred(self, vector, pred, matrices=None):
@@ -282,7 +306,7 @@ class SemFuncModel():
         """
         raise NotImplementedError
     
-    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, link_matrices=None, pred_matrices=None):
+    def observe_latent_out_links(self, vector, pred, neg_preds, out_labels, out_vectors, link_matrices=None, pred_matrices=None):
         """
         Calculate multiple gradients for a node
         (the gradients for incoming links will be found when considering the other node)
@@ -303,6 +327,41 @@ class SemFuncModel():
         # Add gradients...
         # ...from links:
         self.observe_out_links(vector, out_labels, out_vectors, link_matrices)
+        # ...from the pred:
+        self.observe_pred(vector, pred, pred_matrices)
+        # ...from the negative preds:
+        num_preds = neg_preds.shape[0]
+        neg_pred_matrices = [zeros_like(m) for m in self.pred_weights]
+        for p in neg_preds:
+            self.observe_pred(vector, p, neg_pred_matrices)
+        for i, grad in enumerate(neg_pred_matrices):
+            grad /= num_preds
+            pred_matrices[i] -= grad
+        # Return gradient matrices
+        return link_matrices, pred_matrices
+    
+    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices=None, pred_matrices=None):
+        """
+        Calculate multiple gradients for a node
+        :param vector: an entity vector
+        :param pred: a predicate
+        :param neg_preds: an iterable of predicates
+        :param out_labels: an iterable of link labels (outgoing)
+        :param out_vectors: an iterable of entity vectors (outgoing)
+        :param in_labels: an iterable of link labels (incoming)
+        :param in_vectors: an iterable of entity vectors (incoming)
+        :param link_matrices: (optional) the matrices which link gradients should be added to
+        :param pred_matrices: (optional) the matrices which pred gradients should be added to
+        :return: link gradient matrices, pred gradient matrices
+        """
+        # Initialise matrices if not given
+        if link_matrices is None:
+            link_matrices = [zeros_like(m) for m in self.link_weights]
+        if pred_matrices is None:
+            pred_matrices = [zeros_like(m) for m in self.pred_weights]
+        # Add gradients...
+        # ...from links:
+        self.observe_links(vector, out_labels, out_vectors, in_labels, in_vectors, link_matrices)
         # ...from the pred:
         self.observe_pred(vector, pred, pred_matrices)
         # ...from the negative preds:
@@ -624,10 +683,10 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         # Unpack matrices
         gradient_embed, gradient_bias, gradient_factor = matrices
         # Calculate gradients
-        factor = 1 - self.prob(vector, pred)
-        gradient_embed[pred] += factor * dot(self.pred_factor, vector)
-        gradient_factor += outer(self.pred_embed[pred], vector)
-        gradient_bias[pred] += - factor  # all biases assumed to be negative
+        multiplier = 1 - self.prob(vector, pred)
+        gradient_embed[pred] += multiplier * dot(self.pred_factor, vector)
+        gradient_factor += multiplier * outer(self.pred_embed[pred], vector)
+        gradient_bias[pred] += - multiplier  # all biases assumed to be negative
         return matrices
     
     def cosine_of_parameters(self, pred1, pred2):
@@ -792,6 +851,7 @@ class DirectTrainingSetup():
         gradient_matrices = [zeros_like(m) for m in self.link_weights]
         for nodeid, out_labs, out_ids, _, _ in batch:
             # For each node, add gradients from outgoing links
+            # (Incoming links are not included - this assumes we have all the relevant nodes)
             vec = ents[nodeid]
             out_vecs = [ents[i] for i in out_ids]
             self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices)
@@ -805,14 +865,21 @@ class DirectTrainingSetup():
         :param neg_preds: a matrix of negative samples of preds
         :return: link gradient matrices, pred gradient matrices
         """
+        # Initialise gradient matrices
         link_grads = [zeros_like(m) for m in self.link_weights]
         pred_grads = [zeros_like(m) for m in self.pred_weights]
-        for nodeid, pred, out_labs, out_ids, _, _ in batch:
+        for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             # For each node, add gradients
+            # Look up the vector, neg preds, and linked vectors
             vec = ents[nodeid]
             npreds = neg_preds[nodeid]
             out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, link_grads, pred_grads)
+            in_vecs = [ents[i] for i in in_ids]
+            # Observe the gradient
+            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, in_labs, in_vecs, link_grads, pred_grads)
+        # Each link will be observed twice in an epoch
+        for m in link_grads:
+            m /= 2
         return link_grads, pred_grads
     
     # Gradient descent
@@ -965,6 +1032,62 @@ class DirectTrainer():
         histo, _ = histogram(matrix, bin_edges)
         return histo / matrix.size
     
+    def get_all_histograms(self, histogram_bins, bias_histogram_bins):
+        """
+        Produce histograms of weights
+        :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
+        :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
+        :return: non-bias histogram, bias histogram
+        """
+        # Histogram bins of non-bias weights
+        num_bins = len(histogram_bins) + 2
+        histo = zeros((len(self.model.normal_weights) + 1, num_bins))
+        histo[0,1:-1] = histogram_bins
+        histo[0,0] = 0
+        histo[0,-1] = inf
+        # Histogram bins of bias weights
+        num_bins_bias = len(bias_histogram_bins) + 1
+        histo_bias = zeros((len(self.model.bias_weights) + 1, num_bins_bias))
+        histo_bias[0, :-1] = bias_histogram_bins
+        histo_bias[0,-1] = inf
+        # Get histograms of weights
+        for i in range(1, len(histo)):
+            histo[i] = self.get_histogram(self.model.normal_weights[i-1], histo[0,1:-1])
+        for i in range(1, len(histo_bias)):
+            histo_bias[i] = self.get_histogram_bias(self.model.bias_weights[i-1], histo_bias[0, :-1])
+        
+        return histo, histo_bias
+    
+    def report(self, histogram_bins, bias_histogram_bins):
+        """
+        Print a summary of the current state of the model
+        :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
+        :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
+        """
+        # Get histogram
+        histo, histo_bias = self.get_all_histograms(histogram_bins, bias_histogram_bins)
+        # Print to console
+        print()
+        print('Epoch {} complete!'.format(self.setup.epochs))
+        print('Weight histogram (link, then pred):')
+        print(histo)
+        print('Bias histogram (pred):')
+        print(histo_bias)
+        print('max link weights:')
+        for m in self.model.link_weights:
+            print('\t', amax(m))
+        print('max global pred weights:')
+        for m in self.model.pred_global_weights:
+            print('\t', amax(m))
+        print('max local pred weights:')
+        for m in self.model.pred_local_weights:
+            i_max = unravel_index(argmax(m), m.shape)
+            print('\t', m[i_max], '\t', self.model.pred_name[i_max[0]])
+        print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
+        print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)  # Check for new samples?
+        print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
+        print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)  # Just check different preds?
+    
     def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """
         Train the model on the data
@@ -980,18 +1103,6 @@ class DirectTrainer():
         self.setup.minibatch = minibatch
         if not hasattr(self.setup, 'epochs'):
             self.setup.epochs = 0
-        
-        # Histogram bins, for printing
-        num_bins = len(histogram_bins) + 2
-        histo = zeros((len(self.model.normal_weights) + 1, num_bins))
-        histo[0,1:-1] = histogram_bins
-        histo[0,0] = 0
-        histo[0,-1] = inf
-        
-        num_bins_bias = len(bias_histogram_bins) + 1
-        histo_bias = zeros((len(self.model.bias_weights) + 1, num_bins_bias))
-        histo_bias[0, :-1] = bias_histogram_bins
-        histo_bias[0,-1] = inf
         
         # Indices of nodes, to be randomised
         indices = arange(self.N)
@@ -1010,32 +1121,8 @@ class DirectTrainer():
             if (e+1) % print_every == 0:
                 # Record training in the setup
                 self.setup.epochs += print_every
-                # Get histograms of weights
-                for i in range(1, len(histo)):
-                    histo[i] = self.get_histogram(self.model.normal_weights[i-1], histo[0,1:-1])
-                for i in range(1, len(histo_bias)):
-                    histo_bias[i] = self.get_histogram_bias(self.model.bias_weights[i-1], histo_bias[0, :-1])
-                # Print to console
-                print()
-                print('Epoch {} complete!'.format(self.setup.epochs))
-                print('Weight histogram (link, then pred):')
-                print(histo)
-                print('Bias histogram (pred):')
-                print(histo_bias)
-                print('max link weights:')
-                for m in self.model.link_weights:
-                    print('\t', amax(m))
-                print('max global pred weights:')
-                for m in self.model.pred_global_weights:
-                    print('\t', amax(m))
-                print('max local pred weights:')
-                for m in self.model.pred_local_weights:
-                    i_max = unravel_index(argmax(m), m.shape)
-                    print('\t', m[i_max], '\t', self.model.pred_name[i_max[0]])
-                print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
-                print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)
-                print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
-                print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)
+                # Print a summary
+                self.report(histogram_bins, bias_histogram_bins)
                 # Save to file
                 if dump_file:
                     with open(dump_file, 'wb') as f:
