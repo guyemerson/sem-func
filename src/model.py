@@ -1,5 +1,6 @@
 from math import sqrt, exp
-from numpy import array, random, dot, zeros, zeros_like, outer, arange, amax, argmax, unravel_index, bool_, empty, histogram, count_nonzero, inf
+from numpy import array, random, dot, zeros, zeros_like, outer, arange, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril
+from numpy.linalg import norm
 import pickle
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -432,7 +433,7 @@ class SemFuncModel():
         :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: the mean entity vector
         """
-        return sum(self.sample_from_pred(pred, samples=samples, burnin=burnin, interval=interval, chosen=chosen)) / samples
+        return sum(self.sample_from_pred(pred, samples, burnin, interval, chosen)) / samples
     
     def cosine_of_samples(self, pred1, pred2, samples=5, burnin=5, interval=2, chosen=True):
         """
@@ -446,9 +447,10 @@ class SemFuncModel():
         :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: the cosine distance
         """
-        # As dot products are distributive over addition, we can take the dot product of the sums
-        mean1 = self.mean_sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval, chosen=chosen)
-        mean2 = self.mean_sample_from_pred(pred2, samples=samples, burnin=burnin, interval=interval, chosen=chosen)
+        # As dot products are distributive over addition, and all samples have the same length,
+        # we can take the dot product of the sums
+        mean1 = self.mean_sample_from_pred(pred1, samples, burnin, interval, chosen)
+        mean2 = self.mean_sample_from_pred(pred2, samples, burnin, interval, chosen)
         return cosine(mean1, mean2)
     
     def implies(self, pred1, pred2, samples=5, burnin=5, interval=2):
@@ -478,6 +480,96 @@ class SemFuncModel():
         :return: the vector
         """
         raise NotImplementedError
+    
+    # Summary functions
+    
+    def get_histogram(self, matrix, bins):
+        """
+        Get a histogram to summarise the distribution of values in a weight matrix
+        :param matrix: the weight matrix to be summarised
+        :param bins: the histogram bin edges (0 and inf will be added to this)
+        :return: the histogram, as probability mass (not density) in each bin
+        """
+        bin_edges = [0] + list(bins) + [inf]
+        histo_no_zero, _ = histogram(matrix, bin_edges)
+        num_zero = matrix.size - count_nonzero(matrix)
+        histo_no_zero[0] -= num_zero
+        histo = array([num_zero] + list(histo_no_zero)) / matrix.size
+        return histo
+    
+    def get_histogram_bias(self, matrix, bins):
+        """
+        Get a histogram to summarise the distribution of values in a weight matrix
+        :param matrix: the weight matrix to be summarised
+        :param bins: the histogram bin edges (0 and inf will be added to this)
+        :return: the histogram, as probability mass (not density) in each bin
+        """
+        bin_edges = [0] + list(bins) + [inf]
+        histo, _ = histogram(matrix, bin_edges)
+        return histo / matrix.size
+    
+    def get_all_histograms(self, histogram_bins, bias_histogram_bins):
+        """
+        Produce histograms of weights
+        :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
+        :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
+        :return: non-bias histogram, bias histogram
+        """
+        # Histogram bins of non-bias weights
+        num_bins = len(histogram_bins) + 2
+        histo = zeros((len(self.normal_weights) + 1, num_bins))
+        histo[0,1:-1] = histogram_bins
+        histo[0,0] = 0
+        histo[0,-1] = inf
+        # Histogram bins of bias weights
+        num_bins_bias = len(bias_histogram_bins) + 1
+        histo_bias = zeros((len(self.bias_weights) + 1, num_bins_bias))
+        histo_bias[0, :-1] = bias_histogram_bins
+        histo_bias[0,-1] = inf
+        # Get histograms of weights
+        for i in range(1, len(histo)):
+            histo[i] = self.get_histogram(self.normal_weights[i-1], histo[0,1:-1])
+        for i in range(1, len(histo_bias)):
+            histo_bias[i] = self.get_histogram_bias(self.bias_weights[i-1], histo_bias[0, :-1])
+        
+        return histo, histo_bias
+    
+    def distance_matrix_from_parameters(self):
+        """
+        Find the distances between predicates, based on their parameters
+        :return: distance matrix 
+        """
+        raise NotImplementedError
+    
+    def closest_pairs(self, number, metric, **kwargs):
+        """
+        Find the closest pairs of preds 
+        :param number: how many pairs to return
+        :param metric: the metric to use to find distances; a function, or one of the strings:
+            'samples' - use cosine of samples
+            'parameters' - use cosine of parameters
+        :kwargs: will be passed to the metric, as appropriate
+        :return: the names of the closest pairs of preds
+        """
+        # Get the distance matrix
+        if metric == 'samples':
+            matrix = self.distance_matrix_from_samples(**kwargs)
+        elif metric == 'parameters':
+            matrix = self.distance_matrix_from_parameters()
+        else:
+            matrix = self.distance_matrix(metric)
+        # Ignore the diagonal and below it
+        matrix += tril(zeros_like(matrix) + inf)
+        # Find the indices of the smallest distances
+        flat_indices = matrix.argpartition(number-1, None)[:number]
+        indices = unravel_index(flat_indices, matrix.shape)  # a tuple of arrays
+        values = matrix[indices]
+        ind_of_val = values.argsort()[::-1]
+        ind_tuples = list(zip(*indices))
+        sorted_tuples = [ind_tuples[i] for i in ind_of_val]
+        # Return these as preds
+        preds = [(self.pred_name[i], self.pred_name[j]) for i,j in sorted_tuples]
+        return preds
 
 
 class SemFuncModel_IndependentPreds(SemFuncModel):
@@ -710,6 +802,19 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         """
         prob = dot(self.pred_embed[pred], self.pred_factor).clip(low, high)
         return self.sample_card_restr(prob)
+    
+    def distance_matrix_from_parameters(self):
+        """
+        Find the distances between predicates, based on their parameters
+        :return: distance matrix 
+        """
+        parameters = dot(self.pred_embed, self.pred_factor)
+        dot_prod = dot(parameters, parameters.T)
+        lengths = norm(parameters, axis=1)
+        denominator = outer(lengths, lengths)
+        cosine_matrix = dot_prod / denominator
+        distance_matrix = 1 - cosine_matrix
+        return distance_matrix
     
 
 # Converting pydmrs data to form required by SemFuncModel
@@ -1007,65 +1112,14 @@ class DirectTrainer():
         for n in self.nodes:
             self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
     
-    def get_histogram(self, matrix, bins):
-        """
-        Get a histogram to summarise the distribution of values in a weight matrix
-        :param matrix: the weight matrix to be summarised
-        :param bins: the histogram bin edges (0 and inf will be added to this)
-        :return: the histogram, as probability mass (not density) in each bin
-        """
-        bin_edges = [0] + list(bins) + [inf]
-        histo_no_zero, _ = histogram(matrix, bin_edges)
-        num_zero = matrix.size - count_nonzero(matrix)
-        histo_no_zero[0] -= num_zero
-        histo = array([num_zero] + list(histo_no_zero)) / matrix.size
-        return histo
-    
-    def get_histogram_bias(self, matrix, bins):
-        """
-        Get a histogram to summarise the distribution of values in a weight matrix
-        :param matrix: the weight matrix to be summarised
-        :param bins: the histogram bin edges (0 and inf will be added to this)
-        :return: the histogram, as probability mass (not density) in each bin
-        """
-        bin_edges = [0] + list(bins) + [inf]
-        histo, _ = histogram(matrix, bin_edges)
-        return histo / matrix.size
-    
-    def get_all_histograms(self, histogram_bins, bias_histogram_bins):
-        """
-        Produce histograms of weights
-        :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
-        :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
-        :return: non-bias histogram, bias histogram
-        """
-        # Histogram bins of non-bias weights
-        num_bins = len(histogram_bins) + 2
-        histo = zeros((len(self.model.normal_weights) + 1, num_bins))
-        histo[0,1:-1] = histogram_bins
-        histo[0,0] = 0
-        histo[0,-1] = inf
-        # Histogram bins of bias weights
-        num_bins_bias = len(bias_histogram_bins) + 1
-        histo_bias = zeros((len(self.model.bias_weights) + 1, num_bins_bias))
-        histo_bias[0, :-1] = bias_histogram_bins
-        histo_bias[0,-1] = inf
-        # Get histograms of weights
-        for i in range(1, len(histo)):
-            histo[i] = self.get_histogram(self.model.normal_weights[i-1], histo[0,1:-1])
-        for i in range(1, len(histo_bias)):
-            histo_bias[i] = self.get_histogram_bias(self.model.bias_weights[i-1], histo_bias[0, :-1])
-        
-        return histo, histo_bias
-    
     def report(self, histogram_bins, bias_histogram_bins):
         """
-        Print a summary of the current state of the model
+        Print a summary of the current state of training the model
         :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
         :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
         """
         # Get histogram
-        histo, histo_bias = self.get_all_histograms(histogram_bins, bias_histogram_bins)
+        histo, histo_bias = self.model.get_all_histograms(histogram_bins, bias_histogram_bins)
         # Print to console
         print()
         print('Epoch {} complete!'.format(self.setup.epochs))
@@ -1075,18 +1129,21 @@ class DirectTrainer():
         print(histo_bias)
         print('max link weights:')
         for m in self.model.link_weights:
-            print('\t', amax(m))
+            print('\t', m.max())
         print('max global pred weights:')
         for m in self.model.pred_global_weights:
-            print('\t', amax(m))
+            print('\t', m.max())
         print('max local pred weights:')
         for m in self.model.pred_local_weights:
-            i_max = unravel_index(argmax(m), m.shape)
+            i_max = unravel_index(m.argmax(), m.shape)
             print('\t', m[i_max], '\t', self.model.pred_name[i_max[0]])
         print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
         print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)  # Check for new samples?
         print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
         print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)  # Just check different preds?
+        print('closest preds:')
+        for p, q in self.model.closest_pairs(12, 'parameters'):
+            print(p,q)
     
     def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """

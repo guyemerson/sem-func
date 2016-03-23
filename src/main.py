@@ -8,10 +8,11 @@ numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
 DATA = '/anfs/bigdisc/gete2/wikiwoods/core'
 
-with open(os.path.join(DATA,'00390.pkl'), 'rb') as f:
+with open(os.path.join(DATA,'00101.pkl'), 'rb') as f:
     data = pickle.load(f)
 
 pred_count = Counter(p for x in data for p in x if p)
+print(pred_count)
 preds = sorted(pred_count.keys(), key=str)
 links = ('ARG1','ARG2')
 pred_freq = [pred_count[p] for p in preds]
@@ -21,15 +22,15 @@ model = SemFuncModel_FactorisedPreds(preds, links, pred_freq,
                                       card = 5,
                                       embed_dims = 20, 
                                       init_bias = 5,
-                                      init_card = 8,
+                                      init_card = 3,
                                       init_range = 1)
 
 setup = DirectTrainingSetup(model,
-                            rate = 0.01,
+                            rate = 0.001,
                             rate_ratio = 1,
-                            l2 = 0.001,
-                            l2_ratio = 100,
-                            l1 = 0.000001,
+                            l2 = 1,
+                            l2_ratio = 1,
+                            l1 = 1,
                             l1_ratio = 1,
                             ent_steps = 3,
                             pred_steps = 2)
@@ -77,9 +78,15 @@ total = full + agent_only + patient_only
 
 N_PART = 5
 
-p_full = round(full * N_PART / total)
-p_agent = round(agent_only * N_PART / total)
-p_patient = round(patient_only * N_PART / total)
+p_full = full * N_PART / total
+p_agent = agent_only * N_PART / total
+p_patient = patient_only * N_PART / total
+
+print(p_full, p_agent, p_patient)
+
+p_full = round(p_full)
+p_agent = round(p_agent)
+p_patient = round(p_patient)
 
 print(p_full, p_agent, p_patient)
 
