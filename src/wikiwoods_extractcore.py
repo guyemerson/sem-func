@@ -1,9 +1,49 @@
 import sys, os, gzip, pickle
 from xml.etree.ElementTree import ParseError
 from traceback import print_tb
+from multiprocessing import Pool  # @UnresolvedImport
 
 from pydmrs.components import RealPred, GPred
 from pydmrs.core import ListDmrs as Dmrs
+
+PROC = 50
+
+# For Python 3.2:
+from contextlib import contextmanager
+@contextmanager
+def terminating(thing):
+    try:
+        yield thing
+    finally:
+        thing.terminate()
+
+def is_verb(pred):
+    # Ignore GPreds
+    if not isinstance(pred, RealPred):
+        return False
+    if pred.pos == 'v':
+        # For verbs in the lexicon, ignore modals
+        if pred.sense == 'modal':
+            return False
+        else:
+            return True
+    if pred.pos == 'u':
+        # For unknown words, use the PoS-tag
+        tag = pred.lemma.rsplit('/', 1)[-1]
+        if tag[0] == 'v':
+            return True
+    return False
+
+def is_noun(pred):
+    # Assumes not a GPred
+    if pred.pos == 'n':
+        return True
+    if pred.pos == 'u':
+        # For unknown words, use the PoS-tag
+        tag = pred.lemma.rsplit('/', 1)[-1]
+        if tag[0] == 'n':
+            return True
+    return False
 
 def find_sit(dmrs, node):
     """
@@ -14,12 +54,12 @@ def find_sit(dmrs, node):
         or if not found: None, None
     """
     # Only consider verbal nodes
-    if not isinstance(node.pred, RealPred) or node.pred.pos != 'v':
+    if not is_verb(node.pred):
         return None, None
     # Output of the form (verb, agent, patient)
     output = [node.pred, None, None]
     # Record if arguments are RealPreds
-    realpred_only = True
+    noun_only = True
     # Look for both ARG1 and ARG2
     for i in (1,2):
         try:  # See if the argument is there
@@ -34,11 +74,14 @@ def find_sit(dmrs, node):
             # Ignore coordinations
             if pred.pos == 'c':
                 continue
-            else:
-                output[i] = pred
+            # Record the pred
+            output[i] = pred
+            # Record if it's not a noun
+            if not is_noun(pred):
+                noun_only = False
         else:
             # Note that this pred is not a RealPred
-            realpred_only = False
+            noun_only = False
             # Ignore coordinations
             if pred == GPred('implicit_conj'):
                 continue
@@ -60,7 +103,7 @@ def find_sit(dmrs, node):
                 output[i] = pred
     # Check if an argument was found
     if output[1] or output[2]:
-        return output, realpred_only
+        return output, noun_only
     else:
         return None, None
 
@@ -72,15 +115,12 @@ def extract(xmlstring, sits, extra_sits, filename):
     :param extra_sits: the list of extra situations (including GPreds) to append to
     :param filename: the filename to log errors to
     """
-    # Replace characters that cause parse errors
-    xmlstring.replace(b'<', b'&lt;')
-    xmlstring.replace(b'&', b'&amp;')
     try:
         dmrs = Dmrs.loads_xml(xmlstring)
     except ParseError as e:  # badly formed XML
         print("ParseError!")
         with open('wikiwoods_extractcore.log', 'a') as f:
-            f.write(filename + ':\n' + xmlstring.decode() + '\n' + str(e) + '\n')
+            f.write(filename + ':\n' + xmlstring.decode() + '\n' + str(e) + '\n\n')
         return None
     # Look for situations
     for n in dmrs.iter_nodes():
@@ -96,12 +136,17 @@ SOURCE = '/usr/groups/corpora/wikiwoods-1212-tmp/dmrs/'
 TARGET = '/anfs/bigdisc/gete2/wikiwoods/core'
 EXTRA = '/anfs/bigdisc/gete2/wikiwoods/core-extra'
 
-# Process each file in SOURCE
-for filename in sorted(os.listdir(SOURCE)):
+if not os.path.exists(TARGET):
+    os.mkdir(TARGET)
+if not os.path.exists(EXTRA):
+    os.mkdir(EXTRA)
+
+def extract_file(filename):
+    "Extract all situations from a file"
     newname = os.path.splitext(filename)[0]+'.pkl'
     if os.path.exists(os.path.join(TARGET, newname)):
         print('skipping '+filename)
-        continue
+        return
     try:
         with gzip.open(os.path.join(SOURCE, filename),'rb') as f:
             print(filename)
@@ -136,4 +181,9 @@ for filename in sorted(os.listdir(SOURCE)):
             f.write(str(error)+'\n')
             print_tb(trace, file=f)
             f.write('\n\n')
-        continue
+
+# Process each file in SOURCE
+all_files = sorted(os.listdir(SOURCE))
+#with Pool(PROC) as p:  # Python >=3.3
+with terminating(Pool(PROC)) as p:  # Python <3.3
+    p.map(extract_file, all_files)
