@@ -2,19 +2,20 @@ import os, pickle
 from collections import Counter
 from multiprocessing import Pool  # @UnresolvedImport
 
-MIN = 5
+MIN = 100
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core-modal-nooov'
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/core-tmp-' + str(MIN)
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-5'
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/core-' + str(MIN)
 
-PROC = 50
+PROC = 80
 
 all_names = sorted(os.listdir(DATA))
 
 if not os.path.exists(OUTPUT):
     os.mkdir(OUTPUT)
 
-# For Python 3.2:
+###
+# For Python <3.3:
 from contextlib import contextmanager
 @contextmanager
 def terminating(thing):
@@ -22,6 +23,10 @@ def terminating(thing):
         yield thing
     finally:
         thing.terminate()
+_Pool = Pool
+def Pool(*args, **kwargs):
+    return terminating(_Pool(*args, **kwargs))
+###
 
 global_directory_holder = [DATA]
 global_skip = {None}    
@@ -43,16 +48,14 @@ def count_file(fname):
 def count_preds():
     "Count how many times each pred appears"
     count = Counter()
-    # Iterate through files in the data directory, in batches
-    for i in range(0, len(all_names), PROC):
-        # Give each file to a different process
-        #with Pool(PROC) as p:  # Python >=3.3
-        with terminating(Pool(PROC)) as p:  # Python <3.3
-            sub_counts = p.map(count_file, all_names[i:i+PROC])
-        # Combine the results
-        for c in sub_counts:
-            count.update(c)
-        print(len(count))
+    # Iterate through files in the data directory
+    with Pool(PROC) as p:
+        for sub_count in p.imap_unordered(count_file, all_names, 1):
+            # imap_unordered ensures that we process results as they are ready
+            # higher chunksize is faster
+            # Combine results:
+            count.update(sub_count)
+            print(len(count))
     return count
 
 def filter_preds(triples):
@@ -88,8 +91,7 @@ while True:
     print("Filtering...")
     global_skip.update(newskip)
     # Run in multiple processes
-    #with Pool(PROC) as p:  # Python >=3.3
-    with terminating(Pool(PROC)) as p:  # Python <3.3
+    with Pool(PROC) as p:
         p.map(filter_file, all_names)
         #!#p.map(process_file, sorted(os.listdir(global_directory_holder[0])))
     # Use the OUTPUT directory for future iterations
