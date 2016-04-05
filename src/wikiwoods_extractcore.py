@@ -8,15 +8,6 @@ from pydmrs.core import ListDmrs as Dmrs
 
 PROC = 50
 
-# For Python 3.2:
-from contextlib import contextmanager
-@contextmanager
-def terminating(thing):
-    try:
-        yield thing
-    finally:
-        thing.terminate()
-
 def is_verb(pred):
     # Ignore GPreds
     if not isinstance(pred, RealPred):
@@ -184,6 +175,5 @@ def extract_file(filename):
 
 # Process each file in SOURCE
 all_files = sorted(os.listdir(SOURCE))
-#with Pool(PROC) as p:  # Python >=3.3
-with terminating(Pool(PROC)) as p:  # Python <3.3
+with Pool(PROC) as p:
     p.map(extract_file, all_files)

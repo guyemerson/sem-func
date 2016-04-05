@@ -9,20 +9,6 @@ PROC = 3
 
 lemmatizer = WordNetLemmatizer()
 
-###
-# For Python <3.3:
-from contextlib import contextmanager
-@contextmanager
-def terminating(thing):
-    try:
-        yield thing
-    finally:
-        thing.terminate()
-_Pool = Pool
-def Pool(*args, **kwargs):
-    return terminating(_Pool(*args, **kwargs))
-###
-
 def lemmatize_pred(pred, pos):
     old = pred.lemma.rsplit('/', 1)[0]
     new = lemmatizer.lemmatize(old, pos)

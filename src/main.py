@@ -1,22 +1,29 @@
 import sys, os, pickle, numpy
-from collections import Counter
 
 from model import DirectTrainingSetup, DirectTrainer, \
     SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 
 numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core'
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-10000-nodes'
+VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
+FREQ = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
 
-with open(os.path.join(DATA,'00101.pkl'), 'rb') as f:
-    data = pickle.load(f)
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-10000-1.pkl'
 
-pred_count = Counter(p for x in data for p in x if p)
-print(pred_count)
-preds = sorted(pred_count.keys(), key=str)
-links = ('ARG1','ARG2')
-pred_freq = [pred_count[p] for p in preds]
+# Load vocab for model
+with open(VOCAB, 'rb') as f:
+    preds = pickle.load(f)
+with open(FREQ, 'rb') as f:
+    pred_freq = pickle.load(f)
+links = ['ARG1', 'ARG2']
 
+# Ignore rare preds (if using core-100)
+for i in range(len(pred_freq)):
+    if pred_freq[i] < 10000:
+        pred_freq[i] = 0
+
+# Set up model
 model = SemFuncModel_FactorisedPreds(preds, links, pred_freq,
                                       dims = 50,
                                       card = 5,
@@ -25,6 +32,7 @@ model = SemFuncModel_FactorisedPreds(preds, links, pred_freq,
                                       init_card = 3,
                                       init_range = 1)
 
+# Set up training hyperparameters
 setup = DirectTrainingSetup(model,
                             rate = 0.001,
                             rate_ratio = 1,
@@ -35,89 +43,50 @@ setup = DirectTrainingSetup(model,
                             ent_steps = 3,
                             pred_steps = 2)
 
-pred_index = {p:i for i,p in enumerate(preds)}
 
-n_agent = 0
-n_patient = 0
+def create_particle(p_full, p_agent, p_patient):
+    """
+    Create a fantasy particle with a given number of
+    transitive and intransitive situations
+    """
+    particle = []
+    nid = 0
+    for _ in range(p_full):
+        particle.extend([(nid, [0,1], [nid+1,nid+2], (), ()),
+                         (nid+1, (), (), [0], [nid]),
+                         (nid+2, (), (), [1], [nid])])
+        nid += 3
+    for _ in range(p_agent):
+        particle.extend([(nid, [0], [nid+1], (), ()),
+                         (nid+1, (), (), [0], [nid])])
+        nid += 2
+    for _ in range(p_agent):
+        particle.extend([(nid, [1], [nid+1], (), ()),
+                         (nid+1, (), (), [1], [nid])])
+        nid += 2
+    return particle
 
-def convert_triple(triple, nid):
-    global n_agent, n_patient
-    verb, agent, patient = triple
-    verb_i = pred_index[verb]
-    agent_i = pred_index.get(agent, None)
-    patient_i = pred_index.get(patient, None) 
-    output = []
-    verb_labs = []
-    verb_ids = []
-    output.append((nid, verb_i, verb_labs, verb_ids, (), ()))
-    new_id = nid+1
-    if agent:
-        output.append((new_id, agent_i, (), (), [0], [nid]))
-        verb_labs.append(0)
-        verb_ids.append(new_id)
-        new_id += 1
-        n_agent += 1
-    if patient:
-        output.append((new_id, patient_i, (), (), [1], [nid]))
-        verb_labs.append(1)
-        verb_ids.append(new_id)
-        new_id += 1
-        n_patient += 1
-    return output, new_id
-
-nodes = []
-nid = 0
-for triple in data:
-    packaged, nid = convert_triple(triple, nid)
-    nodes.extend(packaged)
-
-full = n_agent+n_patient-len(data)
-agent_only = len(data) - n_patient
-patient_only = len(data) - n_agent
-total = full + agent_only + patient_only
-
-N_PART = 5
-
-p_full = full * N_PART / total
-p_agent = agent_only * N_PART / total
-p_patient = patient_only * N_PART / total
-
-print(p_full, p_agent, p_patient)
-
-p_full = round(p_full)
-p_agent = round(p_agent)
-p_patient = round(p_patient)
-
-print(p_full, p_agent, p_patient)
-
-particle = []
-nid = 0
-for _ in range(p_full):
-    particle.extend([(nid, [0,1], [nid+1,nid+2], (), ()),
-                     (nid+1, (), (), [0], [nid]),
-                     (nid+2, (), (), [1], [nid])])
-    nid += 3
-for _ in range(p_agent):
-    particle.extend([(nid, [0], [nid+1], (), ()),
-                     (nid+1, (), (), [0], [nid])])
-    nid += 2
-for _ in range(p_agent):
-    particle.extend([(nid, [1], [nid+1], (), ()),
-                     (nid+1, (), (), [1], [nid])])
-    nid += 2
-
-trainer = DirectTrainer(setup, nodes, particle,
-                      neg_samples = 5)
+# Set up training (without data)
+trainer = DirectTrainer(setup, (),
+                        create_particle(3,2,5),
+                        neg_samples = 5)
 
 print("Set up complete, beginning training...")
 sys.stdout.flush()
 
-
-trainer.train(epochs = 100,
+# Train on each file
+for filename in sorted(os.listdir(DATA)):
+    print('\nLoading ', filename)
+    with open(os.path.join(DATA, filename), 'rb') as f:
+        trainer.load_file(f)
+    print('Training')
+    # Burn-in?
+    trainer.train(epochs = 3,
               minibatch = 20,
-              print_every = 1)
+              print_every = 1,
+              dump_file = OUTPUT)
 
 """
 import cProfile
-cProfile.runctx('trainer.train(1, 20, 1)',globals(),locals())
+cProfile.runctx('...', globals(), locals())
 """

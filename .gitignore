@@ -1,3 +1,7 @@
 *.pyc
 *.project
 *.pydevproject
+data/*
+*.out
+*.log
+*~

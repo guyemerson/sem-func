@@ -2,9 +2,9 @@ import os, pickle
 from collections import Counter
 from multiprocessing import Pool  # @UnresolvedImport
 
-MIN = 100
+MIN = 10000
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core-5'
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-100'
 OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/core-' + str(MIN)
 
 PROC = 80
@@ -13,20 +13,6 @@ all_names = sorted(os.listdir(DATA))
 
 if not os.path.exists(OUTPUT):
     os.mkdir(OUTPUT)
-
-###
-# For Python <3.3:
-from contextlib import contextmanager
-@contextmanager
-def terminating(thing):
-    try:
-        yield thing
-    finally:
-        thing.terminate()
-_Pool = Pool
-def Pool(*args, **kwargs):
-    return terminating(_Pool(*args, **kwargs))
-###
 
 global_directory_holder = [DATA]
 global_skip = {None}    
@@ -50,9 +36,8 @@ def count_preds():
     count = Counter()
     # Iterate through files in the data directory
     with Pool(PROC) as p:
-        for sub_count in p.imap_unordered(count_file, all_names, 1):
+        for sub_count in p.imap_unordered(count_file, all_names):
             # imap_unordered ensures that we process results as they are ready
-            # higher chunksize is faster
             # Combine results:
             count.update(sub_count)
             print(len(count))

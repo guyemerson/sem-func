@@ -1,5 +1,5 @@
 from math import sqrt, exp
-from numpy import array, random, dot, zeros, zeros_like, outer, arange, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril
+from numpy import array, random, dot, zeros, zeros_like, outer, arange, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
 from numpy.linalg import norm
 import pickle
 from scipy.spatial.distance import cosine
@@ -86,7 +86,8 @@ class SemFuncModel():
             intermed.append(message)
         return intermed
     
-    def convolve(self, prev, p):
+    @staticmethod
+    def convolve(prev, p):
         """
         Convolve prev with (p,1-p), truncated to length self.C+1
         (Faster than numpy.convolve for this case)
@@ -561,7 +562,7 @@ class SemFuncModel():
         # Ignore the diagonal and below it
         matrix += tril(zeros_like(matrix) + inf)
         # Find the indices of the smallest distances
-        flat_indices = matrix.argpartition(number-1, None)[:number]
+        flat_indices = matrix.argpartition(number-1, None)[:number]  # None: flatten array
         indices = unravel_index(flat_indices, matrix.shape)  # a tuple of arrays
         values = matrix[indices]
         ind_of_val = values.argsort()[::-1]
@@ -693,7 +694,7 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         Initialise the model
         :param preds: names of predicates
         :param links: names of links
-        :param freq: frequency of each predicate
+        :param freq: frequency of each predicate, as an int
         :param dims: dimension of latent entities
         :param card: cardinality of latent entities
         :param embed_dims: dimension of pred embeddings
@@ -724,6 +725,8 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
                          * random.binomial(1, init_card / dims, (self.E, self.D))
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
+        # Ignore preds that don't occur
+        self.pred_embed[self.freq == 0] = 0
         
         self.link_weights = [self.link_wei]
         self.pred_local_weights = [self.pred_embed,
@@ -738,7 +741,7 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         # For sampling:
         self.calc_av_pred()  # average predicate
         pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):
+        for i, f in enumerate(freq):  # The original ints, not the normalised values
             pred_toks.extend([i]*f)
         self.pred_tokens = array(pred_toks)
     
@@ -815,6 +818,25 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         cosine_matrix = dot_prod / denominator
         distance_matrix = 1 - cosine_matrix
         return distance_matrix
+    
+    def closest_preds(self, preds, number=1):
+        """
+        Find the nearest neighbour to some preds
+        :param preds: an iterable of predicates
+        :param number: how many neighbours to return (default 1)
+        :return: the nearest neighbours
+        """
+        parameters = dot(self.pred_embed, self.pred_factor)
+        res = []
+        for p in preds:
+            vec = parameters[p]
+            dot_prod = dot(parameters, vec)
+            dist = dot_prod / norm(parameters, axis=1)
+            dist = nan_to_num(dist)
+            # The closest pred will have the second largest dot product
+            # (Largest is the pred itself)
+            res.append(dist.argpartition(-1-number)[-1-number:-1])
+        return res
     
 
 # Converting pydmrs data to form required by SemFuncModel
@@ -1093,6 +1115,22 @@ class DirectTrainer():
         # Training setup
         self.setup = setup
         self.model = setup.model
+        # Negative pred samples
+        self.NEG = neg_samples
+        # Data
+        self.filename = None
+        self.load_data(data)
+        # Fantasy particles
+        self.neg_nodes = particle
+        for i, n in enumerate(self.neg_nodes): assert i == n[0]
+        self.K = len(self.neg_nodes)
+        self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
+    
+    def load_data(self, data):
+        """
+        Load data from a list
+        :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
+        """
         # Dicts for graphs, nodes, and pred frequencies
         self.nodes = data
         for i, n in enumerate(self.nodes): assert i == n[0]
@@ -1101,16 +1139,19 @@ class DirectTrainer():
         self.ents = empty((self.N, self.model.D))
         for i, n in enumerate(self.nodes):
             self.ents[i] = self.model.init_vec_from_pred(n[1])
-        # Particles for negative samples
-        self.neg_nodes = particle
-        for i, n in enumerate(self.neg_nodes): assert i == n[0]
-        self.K = len(self.neg_nodes)
-        self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
         # Negative pred samples
-        self.NEG = neg_samples
-        self.neg_preds = empty((self.N, neg_samples))
+        self.neg_preds = empty((self.N, self.NEG), dtype=int)
         for n in self.nodes:
             self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
+    
+    def load_file(self, filehandle):
+        """
+        Load data from a file
+        :param filehandle: pickled data
+        """
+        data = pickle.load(filehandle)
+        self.load_data(data)
+        self.filename = filehandle.name
     
     def report(self, histogram_bins, bias_histogram_bins):
         """
@@ -1122,7 +1163,7 @@ class DirectTrainer():
         histo, histo_bias = self.model.get_all_histograms(histogram_bins, bias_histogram_bins)
         # Print to console
         print()
-        print('Epoch {} complete!'.format(self.setup.epochs))
+        print('File {} epoch {} complete!'.format(self.filename, self.setup.epochs[self.filename]))
         print('Weight histogram (link, then pred):')
         print(histo)
         print('Bias histogram (pred):')
@@ -1141,9 +1182,19 @@ class DirectTrainer():
         print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)  # Check for new samples?
         print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
         print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)  # Just check different preds?
-        print('closest preds:')
-        for p, q in self.model.closest_pairs(12, 'parameters'):
-            print(p,q)
+        #print('closest preds:')
+        #for p, q in self.model.closest_pairs(12, 'parameters'):
+        #    print(p,q)
+        print('nearest neighbours:')
+        # Get frequent preds
+        if not hasattr(self, 'pred_list'):
+            self.pred_list = list(self.model.freq.argpartition((-1,-2,-3))[-3:])
+        # Get the first few preds in the current file
+        self.pred_list[3:] = [n[1] for n in self.nodes[:3]]
+        nearest = self.model.closest_preds(self.pred_list, 3)
+        for i, p in enumerate(self.pred_list):
+            print('{}: {}'.format(self.model.pred_name[p],
+                                  ', '.join(self.model.pred_name[x] for x in nearest[i])))
     
     def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """
@@ -1159,7 +1210,9 @@ class DirectTrainer():
         # Record training in the setup
         self.setup.minibatch = minibatch
         if not hasattr(self.setup, 'epochs'):
-            self.setup.epochs = 0
+            self.setup.epochs = {}
+        if self.filename not in self.setup.epochs:
+            self.setup.epochs[self.filename] = 0
         
         # Indices of nodes, to be randomised
         indices = arange(self.N)
@@ -1177,7 +1230,7 @@ class DirectTrainer():
             # Print regularly
             if (e+1) % print_every == 0:
                 # Record training in the setup
-                self.setup.epochs += print_every
+                self.setup.epochs[self.filename] += print_every
                 # Print a summary
                 self.report(histogram_bins, bias_histogram_bins)
                 # Save to file
