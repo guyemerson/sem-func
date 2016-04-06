@@ -1,9 +1,26 @@
 from math import sqrt, exp
 from numpy import array, random, dot, zeros, zeros_like, outer, arange, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
 from numpy.linalg import norm
-import pickle
+import pickle, numpy as np
+from multiprocessing import Array, Pool
 from scipy.spatial.distance import cosine
 from scipy.special import expit
+
+def make_shared(array):
+    """
+    Convert a numpy array to a multiprocessing array with numpy access
+    """
+    # Get the C type for the array
+    ctype = np.ctypeslib.as_ctypes(array)
+    while not isinstance(ctype, str): ctype = ctype._type_
+    # Create a shared array
+    shared = Array(ctype, array.flatten())
+    # Create a new numpy array from the shared array
+    flat_array = np.frombuffer(shared._obj, #._wrapper.create_memoryview(),
+                               dtype = array.dtype)
+    # Reshape the new array
+    return flat_array.reshape(array.shape)
+
 
 
 class SemFuncModel():
@@ -702,20 +719,25 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
         """
+        print("Initialising model")
+        
         # Names for human readability
         self.pred_name = preds
         self.link_name = links
+        
         # Fixed parameters
         if isinstance(freq, list):
             freq = array(freq)
         self.freq = freq / sum(freq)
         assert len(freq) == len(preds)
+        
         # Constants
         self.D = dims
         self.V = len(preds)
         self.L = len(links)
         self.C = card
         self.E = embed_dims
+        
         # Trained weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
         if init_card is None: init_card = dims
@@ -725,9 +747,27 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
                          * random.binomial(1, init_card / dims, (self.E, self.D))
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
+        
         # Ignore preds that don't occur
         self.pred_embed[self.freq == 0] = 0
         
+        # For sampling:
+        self.calc_av_pred()  # average predicate
+        pred_toks = []  # fill with pred tokens, for sampling preds
+        for i, f in enumerate(freq):  # The original ints, not the normalised values
+            pred_toks.extend([i]*f)
+        self.pred_tokens = array(pred_toks)
+        
+        print("Converting to shared memory")
+        # Convert to shared memory
+        self.freq = make_shared(self.freq)
+        self.link_wei = make_shared(self.link_wei)
+        self.pred_embed = make_shared(self.pred_embed)
+        self.pred_factor = make_shared(self.pred_factor)
+        self.pred_bias = make_shared(self.pred_bias)
+        self.pred_tokens = make_shared(self.pred_tokens)
+        
+        # Package for training setup
         self.link_weights = [self.link_wei]
         self.pred_local_weights = [self.pred_embed,
                                    self.pred_bias]
@@ -738,12 +778,8 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         self.normal_weights=[self.link_wei,
                              self.pred_embed,
                              self.pred_factor]
-        # For sampling:
-        self.calc_av_pred()  # average predicate
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):  # The original ints, not the normalised values
-            pred_toks.extend([i]*f)
-        self.pred_tokens = array(pred_toks)
+        
+        print("Finished initialising model")
     
     def prob(self, ent, pred):
         """
@@ -830,12 +866,16 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         res = []
         for p in preds:
             vec = parameters[p]
+            if not vec.any():  # if all entries are zero
+                res.append(None)
+                continue
             dot_prod = dot(parameters, vec)
             dist = dot_prod / norm(parameters, axis=1)
             dist = nan_to_num(dist)
             # The closest pred will have the second largest dot product
             # (Largest is the pred itself)
-            res.append(dist.argpartition(-1-number)[-1-number:-1])
+            indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
+            res.append(indices)
         return res
     
 
@@ -1153,11 +1193,12 @@ class DirectTrainer():
         self.load_data(data)
         self.filename = filehandle.name
     
-    def report(self, histogram_bins, bias_histogram_bins):
+    def report(self, histogram_bins, bias_histogram_bins, num_preds=5):
         """
         Print a summary of the current state of training the model
         :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
         :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
+        :param num_preds: number of preds to print the nearest neighbours of
         """
         # Get histogram
         histo, histo_bias = self.model.get_all_histograms(histogram_bins, bias_histogram_bins)
@@ -1188,13 +1229,16 @@ class DirectTrainer():
         print('nearest neighbours:')
         # Get frequent preds
         if not hasattr(self, 'pred_list'):
-            self.pred_list = list(self.model.freq.argpartition((-1,-2,-3))[-3:])
+            self.pred_list = list(self.model.freq.argpartition(tuple(range(-1,-1-num_preds,-1)))[-num_preds:])
         # Get the first few preds in the current file
-        self.pred_list[3:] = [n[1] for n in self.nodes[:3]]
+        self.pred_list[num_preds:] = [n[1] for n in self.nodes[:num_preds]]
         nearest = self.model.closest_preds(self.pred_list, 3)
         for i, p in enumerate(self.pred_list):
-            print('{}: {}'.format(self.model.pred_name[p],
-                                  ', '.join(self.model.pred_name[x] for x in nearest[i])))
+            if nearest[i] is not None:
+                neighbours = ', '.join(self.model.pred_name[x] for x in nearest[i])
+            else:
+                neighbours = ''
+            print('{}: {}'.format(self.model.pred_name[p], neighbours))
     
     def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """
@@ -1226,6 +1270,51 @@ class DirectTrainer():
                 batch = [self.nodes[i] for i in indices[i : i+minibatch]]
                 # Train on this batch
                 self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
+                
+            # Print regularly
+            if (e+1) % print_every == 0:
+                # Record training in the setup
+                self.setup.epochs[self.filename] += print_every
+                # Print a summary
+                self.report(histogram_bins, bias_histogram_bins)
+                # Save to file
+                if dump_file:
+                    with open(dump_file, 'wb') as f:
+                        pickle.dump(self.setup, f)
+    
+    def train_batch(self, batch):
+        self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
+    
+    def train_multiprocess(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
+        """
+        Train the model on the data
+        :param epochs: number of passes over the data
+        :param minibatch: size of a minibatch (as a number of graphs)
+        :param print_every: how many epochs should pass before printing
+        :param histogram_bins: edges of bins to summarise distribution of weights
+            (default: 0.05, 0.2, 1)
+        :param bias_histogram_bins: edges of bins to summarise distribution of biases
+        :param dump_file: (optional) file to save the trained model
+        """
+                
+        # Record training in the setup
+        self.setup.minibatch = minibatch
+        if not hasattr(self.setup, 'epochs'):
+            self.setup.epochs = {}
+        if self.filename not in self.setup.epochs:
+            self.setup.epochs[self.filename] = 0
+        
+        # Indices of nodes, to be randomised
+        indices = arange(self.N)
+        for e in range(epochs):
+            # Randomise batches
+            # (At the moment, just one batch of particles)
+            random.shuffle(indices)
+            batches = ([self.nodes[i] for i in indices[i : i+minibatch]] \
+                       for i in range(0, self.N, minibatch))
+            # Process batches in different processes
+            with Pool(20) as p:
+                p.map(self.train_batch, batches)
                 
             # Print regularly
             if (e+1) % print_every == 0:

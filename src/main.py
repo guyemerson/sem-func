@@ -1,15 +1,21 @@
 import sys, os, pickle, numpy
+from multiprocessing import Pool
 
 from model import DirectTrainingSetup, DirectTrainer, \
     SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 
 numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core-10000-nodes'
+THRESH = 10000
+
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-{}-nodes'.format(THRESH)
 VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
 FREQ = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
 
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-10000-1.pkl'
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-4.pkl'.format(THRESH)
+
+if os.path.exists(OUTPUT):
+    raise Exception('File already exists')
 
 # Load vocab for model
 with open(VOCAB, 'rb') as f:
@@ -20,7 +26,7 @@ links = ['ARG1', 'ARG2']
 
 # Ignore rare preds (if using core-100)
 for i in range(len(pred_freq)):
-    if pred_freq[i] < 10000:
+    if pred_freq[i] < THRESH:
         pred_freq[i] = 0
 
 # Set up model
@@ -74,17 +80,36 @@ trainer = DirectTrainer(setup, (),
 print("Set up complete, beginning training...")
 sys.stdout.flush()
 
+def train_on_file(fname):
+    print(fname)
+    with open(os.path.join(DATA, fname), 'rb') as f:
+        trainer.load_file(f)
+    trainer.train(epochs = 3,
+                  minibatch = 20,
+                  print_every = 1)
+
+#from time import time
+
 # Train on each file
-for filename in sorted(os.listdir(DATA)):
+with Pool(20) as p:
+    #t0 = time()
+    p.map(train_on_file, sorted(os.listdir(DATA)))
+#print(time()-t0)
+
+"""
+# Train on each file
+t0 = time()
+for filename in sorted(os.listdir(DATA))[:5]:
     print('\nLoading ', filename)
     with open(os.path.join(DATA, filename), 'rb') as f:
         trainer.load_file(f)
     print('Training')
     # Burn-in?
-    trainer.train(epochs = 3,
-              minibatch = 20,
-              print_every = 1,
-              dump_file = OUTPUT)
+    trainer.train(epochs = 1,
+                  minibatch = 20,
+                  print_every = 2)#,dump_file = OUTPUT)
+print(time()-t0)
+"""
 
 """
 import cProfile
