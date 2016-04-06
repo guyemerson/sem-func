@@ -1192,6 +1192,7 @@ class DirectTrainer():
         data = pickle.load(filehandle)
         self.load_data(data)
         self.filename = filehandle.name
+        self.epochs = 0
     
     def report(self, histogram_bins, bias_histogram_bins, num_preds=5):
         """
@@ -1204,7 +1205,7 @@ class DirectTrainer():
         histo, histo_bias = self.model.get_all_histograms(histogram_bins, bias_histogram_bins)
         # Print to console
         print()
-        print('File {} epoch {} complete!'.format(self.filename, self.setup.epochs[self.filename]))
+        print('File {} epoch {} complete!'.format(self.filename, self.epochs))
         print('Weight histogram (link, then pred):')
         print(histo)
         print('Bias histogram (pred):')
@@ -1240,27 +1241,24 @@ class DirectTrainer():
                 neighbours = ''
             print('{}: {}'.format(self.model.pred_name[p], neighbours))
     
-    def train(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
+    def train(self, epochs, minibatch, print_every=inf, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
         """
         Train the model on the data
         :param epochs: number of passes over the data
         :param minibatch: size of a minibatch (as a number of graphs)
         :param print_every: how many epochs should pass before printing
+            (default: don't print)
         :param histogram_bins: edges of bins to summarise distribution of weights
             (default: 0.05, 0.2, 1)
         :param bias_histogram_bins: edges of bins to summarise distribution of biases
-        :param dump_file: (optional) file to save the trained model
+            (default: 4, 5, 6, 10)
+        :param dump_file: (optional) file to save the trained model (dumps after printing)
         """
-        # Record training in the setup
-        self.setup.minibatch = minibatch
-        if not hasattr(self.setup, 'epochs'):
-            self.setup.epochs = {}
-        if self.filename not in self.setup.epochs:
-            self.setup.epochs[self.filename] = 0
-        
         # Indices of nodes, to be randomised
         indices = arange(self.N)
         for e in range(epochs):
+            # Record that another epoch has passed
+            self.epochs += 1
             # Randomise batches
             # (At the moment, just one batch of particles)
             random.shuffle(indices)
@@ -1273,53 +1271,6 @@ class DirectTrainer():
                 
             # Print regularly
             if (e+1) % print_every == 0:
-                # Record training in the setup
-                self.setup.epochs[self.filename] += print_every
-                # Print a summary
-                self.report(histogram_bins, bias_histogram_bins)
-                # Save to file
-                if dump_file:
-                    with open(dump_file, 'wb') as f:
-                        pickle.dump(self.setup, f)
-    
-    def train_batch(self, batch):
-        self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
-    
-    def train_multiprocess(self, epochs, minibatch, print_every, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
-        """
-        Train the model on the data
-        :param epochs: number of passes over the data
-        :param minibatch: size of a minibatch (as a number of graphs)
-        :param print_every: how many epochs should pass before printing
-        :param histogram_bins: edges of bins to summarise distribution of weights
-            (default: 0.05, 0.2, 1)
-        :param bias_histogram_bins: edges of bins to summarise distribution of biases
-        :param dump_file: (optional) file to save the trained model
-        """
-                
-        # Record training in the setup
-        self.setup.minibatch = minibatch
-        if not hasattr(self.setup, 'epochs'):
-            self.setup.epochs = {}
-        if self.filename not in self.setup.epochs:
-            self.setup.epochs[self.filename] = 0
-        
-        # Indices of nodes, to be randomised
-        indices = arange(self.N)
-        for e in range(epochs):
-            # Randomise batches
-            # (At the moment, just one batch of particles)
-            random.shuffle(indices)
-            batches = ([self.nodes[i] for i in indices[i : i+minibatch]] \
-                       for i in range(0, self.N, minibatch))
-            # Process batches in different processes
-            with Pool(20) as p:
-                p.map(self.train_batch, batches)
-                
-            # Print regularly
-            if (e+1) % print_every == 0:
-                # Record training in the setup
-                self.setup.epochs[self.filename] += print_every
                 # Print a summary
                 self.report(histogram_bins, bias_histogram_bins)
                 # Save to file

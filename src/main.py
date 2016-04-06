@@ -1,5 +1,7 @@
 import sys, os, pickle, numpy
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
+from time import sleep
+from copy import copy
 
 from model import DirectTrainingSetup, DirectTrainer, \
     SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
@@ -12,7 +14,8 @@ DATA = '/anfs/bigdisc/gete2/wikiwoods/core-{}-nodes'.format(THRESH)
 VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
 FREQ = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
 
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-4.pkl'.format(THRESH)
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-4'.format(THRESH)
+# Save under OUTPUT.pkl and OUTPUT.aux.pkl
 
 if os.path.exists(OUTPUT):
     raise Exception('File already exists')
@@ -72,44 +75,55 @@ def create_particle(p_full, p_agent, p_patient):
         nid += 2
     return particle
 
+manager = Manager()
+
+aux_info = {'particle': create_particle(3,2,5),
+            'neg_samples': 5,
+            'epochs': 3,
+            'minibatch': 20,
+            'processes': 50,
+            'completed_files': manager.list()}
+globals().update(aux_info)
+
 # Set up training (without data)
 trainer = DirectTrainer(setup, (),
-                        create_particle(3,2,5),
-                        neg_samples = 5)
+                        particle,  # @UndefinedVariable
+                        neg_samples = neg_samples)  # @UndefinedVariable
 
 print("Set up complete, beginning training...")
 sys.stdout.flush()
 
 def train_on_file(fname):
+    """
+    Train on a single file
+    (without saving to disk)
+    """
     print(fname)
     with open(os.path.join(DATA, fname), 'rb') as f:
         trainer.load_file(f)
-    trainer.train(epochs = 3,
-                  minibatch = 20,
-                  print_every = 1)
+    trainer.train(epochs = epochs,  # @UndefinedVariable
+                  minibatch = minibatch)  # @UndefinedVariable
+    completed_files.append(fname)  # @UndefinedVariable
 
-#from time import time
+def save():
+    """
+    Save trained model to disk
+    """
+    with open(OUTPUT+'.pkl', 'wb') as f:
+        pickle.dump(setup, f)
+    with open(OUTPUT+'.aux.pkl', 'wb') as f:
+        actual_info = copy(aux_info)
+        actual_info['completed_files'] = aux_info['completed_files']._getvalue()
+        pickle.dump(actual_info, f)
 
-# Train on each file
-with Pool(20) as p:
-    #t0 = time()
-    p.map(train_on_file, sorted(os.listdir(DATA)))
-#print(time()-t0)
-
-"""
-# Train on each file
-t0 = time()
-for filename in sorted(os.listdir(DATA))[:5]:
-    print('\nLoading ', filename)
-    with open(os.path.join(DATA, filename), 'rb') as f:
-        trainer.load_file(f)
-    print('Training')
-    # Burn-in?
-    trainer.train(epochs = 1,
-                  minibatch = 20,
-                  print_every = 2)#,dump_file = OUTPUT)
-print(time()-t0)
-"""
+# Give different files to different processes
+with Pool(processes) as p:  # @UndefinedVariable
+    res = p.map_async(train_on_file, sorted(os.listdir(DATA)))
+    # While waiting for training to finish, save regularly
+    while not res.ready():
+        save()
+        sleep(60)
+save()
 
 """
 import cProfile
