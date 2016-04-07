@@ -606,19 +606,24 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
         """
+        print("Initialising model")
+        
         # Names for human readability
         self.pred_name = preds
         self.link_name = links
+        
         # Fixed parameters
         if isinstance(freq, list):
             freq = array(freq)
         self.freq = freq / sum(freq)
         assert len(freq) == len(preds)
+        
         # Constants
         self.D = dims
         self.V = len(preds)
         self.L = len(links)
         self.C = card
+        
         # Trained weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
         if init_card is None: init_card = dims
@@ -627,6 +632,25 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
         
+        # Ignore preds that don't occur
+        self.pred_embed[self.freq == 0] = 0
+        
+        # For sampling:
+        self.calc_av_pred()  # average predicate
+        pred_toks = []  # fill with pred tokens, for sampling preds
+        for i, f in enumerate(freq):
+            pred_toks.extend([i]*f)
+        self.pred_tokens = array(pred_toks)
+        
+        print("Converting to shared memory")
+        # Convert to shared memory
+        self.freq = make_shared(self.freq)
+        self.link_wei = make_shared(self.link_wei)
+        self.pred_wei = make_shared(self.pred_wei)
+        self.pred_bias = make_shared(self.pred_bias)
+        self.pred_tokens = make_shared(self.pred_tokens)
+        
+        # Package for training setup
         self.link_weights = [self.link_wei]
         self.pred_local_weights = [self.pred_wei,
                                    self.pred_bias]
@@ -636,12 +660,6 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.bias_weights = [self.pred_bias]
         self.normal_weights=[self.link_wei,
                              self.pred_wei]
-        # For sampling:
-        self.calc_av_pred()  # average predicate
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):
-            pred_toks.extend([i]*f)
-        self.pred_tokens = array(pred_toks)
     
     def prob(self, ent, pred):
         """
@@ -700,6 +718,28 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         """
         prob = self.pred_wei[pred].clip(low, high)
         return self.sample_card_restr(prob)
+    
+    def closest_preds(self, preds, number=1):
+        """
+        Find the nearest neighbour to some preds
+        :param preds: an iterable of predicates
+        :param number: how many neighbours to return (default 1)
+        :return: the nearest neighbours
+        """
+        res = []
+        for p in preds:
+            vec = self.pred_wei[p]
+            if not vec.any():  # if all entries are zero
+                res.append(None)
+                continue
+            dot_prod = dot(self.pred_wei, vec)
+            dist = dot_prod / norm(self.pred_wei, axis=1)
+            dist = nan_to_num(dist)
+            # The closest pred will have the second largest dot product
+            # (Largest is the pred itself)
+            indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
+            res.append(indices)
+        return res
 
 
 class SemFuncModel_FactorisedPreds(SemFuncModel):

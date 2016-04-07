@@ -110,7 +110,11 @@ def save():
     Save trained model to disk
     """
     with open(OUTPUT+'.pkl', 'wb') as f:
-        pickle.dump(setup, f)
+        crucial = copy(setup)
+        crucial.pred_tokens = FREQ
+        crucial.freq = FREQ
+        crucial.pred_name = VOCAB
+        pickle.dump(crucial, f)
     with open(OUTPUT+'.aux.pkl', 'wb') as f:
         actual_info = copy(aux_info)
         actual_info['completed_files'] = aux_info['completed_files']._getvalue()
