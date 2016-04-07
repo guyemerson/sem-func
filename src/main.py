@@ -14,10 +14,10 @@ DATA = '/anfs/bigdisc/gete2/wikiwoods/core-{}-nodes'.format(THRESH)
 VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
 FREQ = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
 
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-4'.format(THRESH)
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-1'.format(THRESH)
 # Save under OUTPUT.pkl and OUTPUT.aux.pkl
 
-if os.path.exists(OUTPUT):
+if os.path.exists(OUTPUT+'.pkl'):
     raise Exception('File already exists')
 
 # Load vocab for model
@@ -33,12 +33,11 @@ for i in range(len(pred_freq)):
         pred_freq[i] = 0
 
 # Set up model
-model = SemFuncModel_FactorisedPreds(preds, links, pred_freq,
-                                      dims = 50,
+model = SemFuncModel_IndependentPreds(preds, links, pred_freq,
+                                      dims = 40,
                                       card = 5,
-                                      embed_dims = 20, 
                                       init_bias = 5,
-                                      init_card = 3,
+                                      init_card = 8,
                                       init_range = 1)
 
 # Set up training hyperparameters
@@ -111,9 +110,10 @@ def save():
     """
     with open(OUTPUT+'.pkl', 'wb') as f:
         crucial = copy(setup)
-        crucial.pred_tokens = FREQ
-        crucial.freq = FREQ
-        crucial.pred_name = VOCAB
+        crucial.model = copy(crucial.model)
+        crucial.model.pred_tokens = FREQ
+        crucial.model.freq = FREQ
+        crucial.model.pred_name = VOCAB
         pickle.dump(crucial, f)
     with open(OUTPUT+'.aux.pkl', 'wb') as f:
         actual_info = copy(aux_info)

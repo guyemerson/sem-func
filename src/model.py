@@ -21,6 +21,11 @@ def make_shared(array):
     # Reshape the new array
     return flat_array.reshape(array.shape)
 
+def is_verb(string):
+    """
+    Check if a predstring is for a verb or a noun
+    """
+    return string.split('_')[-2] == 'v'
 
 
 class SemFuncModel():
@@ -626,14 +631,26 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         
         # Trained weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
-        if init_card is None: init_card = dims
-        self.pred_wei = random.uniform(0, init_range, (self.V, self.D)) \
-                      * random.binomial(1, init_card / dims, (self.V, self.D))
+        mid = int(dims/2)
+        agent_high = int(dims * 0.8)
+        patient_low = int(dims * 0.7)
+        self.link_wei[0, :mid, mid:agent_high] = 0.3
+        self.link_wei[1, :mid, patient_low:] = 0.3
+        if init_card is None: init_card = dims/2
+        self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
+        for i,p in enumerate(preds):
+            if is_verb(p):
+                self.pred_wei[i, mid:] = 0
+                self.pred_wei[i, :mid] *= random.binomial(1, 2*init_card / dims, mid)
+            else:
+                self.pred_wei[i, :mid] = 0
+                self.pred_wei[i, mid:] *= random.binomial(1, 2*init_card / dims, mid)
+        
         self.pred_bias = empty((self.V,))
         self.pred_bias[:] = init_bias
         
         # Ignore preds that don't occur
-        self.pred_embed[self.freq == 0] = 0
+        self.pred_wei[self.freq == 0] = 0
         
         # For sampling:
         self.calc_av_pred()  # average predicate
