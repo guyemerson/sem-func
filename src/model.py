@@ -985,7 +985,7 @@ def resample_background_triple(self, triple, ents):
     ents[event] = self.model.resample_background(labs, nids, (), ())
 
 
-class DirectTrainingSetup():
+class TrainingSetup():
     """
     A semantic function model with a training regime.
     Expects preprocessed data during training.
@@ -1013,10 +1013,10 @@ class DirectTrainingSetup():
         # Hyperparameters
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
-        self.L2_link = 1 - 2 * self.rate_link * l2 / sqrt(l2_ratio)
-        self.L2_pred = 1 - 2 * self.rate_pred * l2 * sqrt(l2_ratio)
-        self.L1_link = self.rate_link * l1 / sqrt(l1_ratio)
-        self.L1_pred = self.rate_pred * l1 * sqrt(l1_ratio)
+        self.L2_link = 2 * l2 / sqrt(l2_ratio)
+        self.L2_pred = 2 * l2 * sqrt(l2_ratio)
+        self.L1_link = l1 / sqrt(l1_ratio)
+        self.L1_pred = l1 * sqrt(l1_ratio)
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
@@ -1115,35 +1115,7 @@ class DirectTrainingSetup():
         :param pred_gradients: gradients for pred weights
         :param pred_list: (optional) restrict regularisation to these predicates
         """
-        # Update from the gradient
-        for i, grad in enumerate(link_gradients):
-            self.link_weights[i] += grad
-        for i, grad in enumerate(pred_gradients):
-            self.pred_weights[i] += grad
-        
-        # Apply regularisation
-        for wei in self.link_weights:
-            wei *= self.L2_link
-            wei -= self.L1_link
-        for wei in self.pred_global_weights:
-            wei *= self.L2_pred
-            wei -= self.L1_pred
-        if pred_list:
-            for wei in self.pred_local_weights:
-                for p in pred_list:
-                    wei[p] *= self.L2_pred
-                    wei[p] -= self.L1_pred
-        else:
-            for wei in self.pred_local_weights:
-                wei *= self.L2_pred
-                wei -= self.L1_pred
-        
-        # Remove negative weights
-        for wei in self.all_weights:
-            wei.clip(0, out=wei)
-        
-        # Recalculate average predicate
-        self.model.calc_av_pred()
+        raise NotImplementedError
     
     # Batch training
     
@@ -1195,6 +1167,122 @@ class DirectTrainingSetup():
             for i, lab in enumerate(out_labs):
                 links.append([start, out_ids[i], lab])
         return self.model.background_energy(links, ents)
+
+
+class DirectTrainingSetup(TrainingSetup):
+    """
+    Use the gradients directly
+    """
+    def __init__(self, *args, **kwargs):
+        """
+        L1 and L2 will be used directly
+        """
+        super().__init__(*args, **kwargs)
+        
+        self.L1_link *= self.rate_link
+        self.L1_pred *= self.rate_pred
+        self.L2_link = 1 - self.L2_link * self.rate_link
+        self.L2_pred = 1 - self.L2_pred * self.rate_pred
+    
+    def descend(self, link_gradients, pred_gradients, pred_list=None):
+        """
+        Descend the gradient and apply regularisation
+        :param link_gradients: gradients for link weights
+        :param pred_gradients: gradients for pred weights
+        :param pred_list: (optional) restrict regularisation to these predicates
+        """
+        # Update from the gradient
+        for i, grad in enumerate(link_gradients):
+            self.link_weights[i] += grad * self.rate_link
+        for i, grad in enumerate(pred_gradients):
+            self.pred_weights[i] += grad * self.rate_pred
+        
+        # Apply regularisation
+        for wei in self.link_weights:
+            wei *= self.L2_link
+            wei -= self.L1_link
+        for wei in self.pred_global_weights:
+            wei *= self.L2_pred
+            wei -= self.L1_pred
+        if pred_list:
+            for wei in self.pred_local_weights:
+                for p in pred_list:
+                    wei[p] *= self.L2_pred
+                    wei[p] -= self.L1_pred
+        else:
+            for wei in self.pred_local_weights:
+                wei *= self.L2_pred
+                wei -= self.L1_pred
+        
+        # Remove negative weights
+        for wei in self.all_weights:
+            wei.clip(0, out=wei)
+        
+        # Recalculate average predicate
+        self.model.calc_av_pred()
+
+
+class AdaGradTrainingSetup(TrainingSetup):
+    """
+    Use AdaGrad
+    """
+    def __init__(self, *args, ada_decay=1, **kwargs):
+        """
+        Initialise as TrainingSetup, but also initialise shared square gradient matrices
+        """
+        super().__init__(*args, **kwargs)
+        
+        # Squared gradients
+        assert ada_decay > 0
+        assert ada_decay < 1
+        self.ada_decay = ada_decay
+        self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
+        self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]
+        
+    def descend(self, link_gradients, pred_gradients, pred_list=None):
+        """
+        Divide step lengths by the sum of the square gradients
+        """
+        for i, grad in enumerate(link_gradients):
+            # Add regularisation
+            grad -= self.L1_link
+            grad -= self.link_weights[i] * self.L2_link
+            # Increase square sums
+            self.link_sqsum[i] *= self.ada_decay
+            self.link_sqsum[i] += grad ** 2
+            # Divide by root sum square
+            grad /= self.link_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
+            # Multiply by learning rate
+            grad *= self.rate_link
+            # Descend
+            self.link_weights[i] += grad
+        
+        for i, grad in enumerate(pred_gradients):
+            if pred_list and i < len(self.pred_local_weights):
+                # Add regularisation
+                for p in pred_list:
+                    grad[p] -= self.L1_pred
+                    grad[p] -= self.pred_weights[i][p] * self.L2_pred
+            else:
+                # Add regularisation
+                grad -= self.L1_pred
+                grad -= self.pred_weights[i] * self.L2_pred
+            # Increase square sums
+            self.pred_sqsum[i] *= self.ada_decay
+            self.pred_sqsum[i] += grad ** 2
+            # Divide by root sum square
+            grad /= self.pred_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
+            # Multiply by learning rate
+            grad *= self.rate_pred
+            # Descend
+            self.pred_weights[i] += grad
+        
+        # Remove negative weights
+        for wei in self.all_weights:
+            wei.clip(0, out=wei)
+        
+        # Recalculate average predicate
+        self.model.calc_av_pred()
 
 
 class DirectTrainer():
