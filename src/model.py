@@ -283,7 +283,7 @@ class SemFuncModel():
             gradient_matrix[label] += outer(vector, out_vectors[i])
         return gradient_matrix,
     
-    def observe_links(self, vector, out_labels, out_vectors, in_labels, in_vectors, matrices=None):
+    def observe_links(self, vector, out_labels, out_vectors, in_labels, in_vectors, matrices=None, link_counts=None):
         """
         Calculate link weight gradients for the outgoing links of a node
         (the gradients for incoming links will be found when considering the other node)
@@ -293,19 +293,24 @@ class SemFuncModel():
         :param in_labels: an iterable of link labels (incoming)
         :param in_vectors: an iterable of entity vectors (incoming)
         :param matrices: (optional) the matrices which gradients should be added to
-        :return: gradient matrices
+        :param link_counts: (optional) the vector of counts which should be added to
+        :return: gradient matrices, number of times links observed
         """
         # Initialise matrices if not given
         if matrices is None:
             matrices = [zeros_like(m) for m in self.link_weights]
+        if link_counts is None:
+            link_counts = zeros(self.L)
         # Unpack matrices
         gradient_matrix, = matrices
         # Calculate gradient for each link
         for i, label in enumerate(out_labels):
             gradient_matrix[label] += outer(vector, out_vectors[i])
+            link_counts[label] += 1
         for i, label in enumerate(in_labels):
             gradient_matrix[label] += outer(in_vectors[i], vector)
-        return gradient_matrix,
+            link_counts[label] += 1
+        return gradient_matrix, link_counts
     
     def observe_pred(self, vector, pred, matrices=None):
         """
@@ -351,7 +356,7 @@ class SemFuncModel():
         # Return gradient matrices
         return link_matrices, pred_matrices
     
-    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices=None, pred_matrices=None):
+    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices=None, pred_matrices=None, link_counts=None):
         """
         Calculate multiple gradients for a node
         :param vector: an entity vector
@@ -363,16 +368,19 @@ class SemFuncModel():
         :param in_vectors: an iterable of entity vectors (incoming)
         :param link_matrices: (optional) the matrices which link gradients should be added to
         :param pred_matrices: (optional) the matrices which pred gradients should be added to
-        :return: link gradient matrices, pred gradient matrices
+        :param link_counts: (optional) the vector of counts which should be added to
+        :return: link gradient matrices, pred gradient matrices, number of times links observed
         """
         # Initialise matrices if not given
         if link_matrices is None:
             link_matrices = [zeros_like(m) for m in self.link_weights]
         if pred_matrices is None:
             pred_matrices = [zeros_like(m) for m in self.pred_weights]
+        if link_counts is None:
+            link_counts = zeros(self.L)
         # Add gradients...
         # ...from links:
-        self.observe_links(vector, out_labels, out_vectors, in_labels, in_vectors, link_matrices)
+        self.observe_links(vector, out_labels, out_vectors, in_labels, in_vectors, link_matrices, link_counts)
         # ...from the pred:
         self.observe_pred(vector, pred, pred_matrices)
         # ...from the negative preds:
@@ -384,7 +392,7 @@ class SemFuncModel():
             grad /= num_preds
             pred_matrices[i] -= grad
         # Return gradient matrices
-        return link_matrices, pred_matrices
+        return link_matrices, pred_matrices, link_counts
     
     # Testing functions
     

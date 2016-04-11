@@ -1,5 +1,5 @@
 import pickle
-from numpy import arange, empty, inf, random, unravel_index
+from numpy import arange, empty, inf, random, unravel_index, zeros
 
 def create_particle(p_full, p_agent, p_patient):
     """
@@ -45,7 +45,11 @@ class DirectTrainer():
         self.load_data(data)
         # Fantasy particles
         self.neg_nodes = particle
-        for i, n in enumerate(self.neg_nodes): assert i == n[0]
+        self.neg_link_counts = zeros(self.model.L)
+        for i, n in enumerate(self.neg_nodes):
+            assert i == n[0]
+            for label in n[1] + n[3]:
+                self.neg_link_counts[label] += 1
         self.K = len(self.neg_nodes)
         self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
     
@@ -158,7 +162,7 @@ class DirectTrainer():
                 # Get the nodes for this batch
                 batch = [self.nodes[i] for i in indices[i : i+minibatch]]
                 # Train on this batch
-                self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
+                self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents, self.neg_link_counts)
                 
             # Print regularly
             if (e+1) % print_every == 0:

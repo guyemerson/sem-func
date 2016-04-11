@@ -1,6 +1,6 @@
 import pickle
 from math import sqrt
-from numpy import zeros_like, array
+from numpy import zeros, zeros_like, array
 
 from utils import make_shared
 
@@ -111,6 +111,7 @@ class TrainingSetup():
         # Initialise gradient matrices
         link_grads = [zeros_like(m) for m in self.link_weights]
         pred_grads = [zeros_like(m) for m in self.pred_weights]
+        link_counts = zeros(self.model.L)
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             # For each node, add gradients
             # Look up the vector, neg preds, and linked vectors
@@ -119,11 +120,8 @@ class TrainingSetup():
             out_vecs = [ents[i] for i in out_ids]
             in_vecs = [ents[i] for i in in_ids]
             # Observe the gradient
-            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, in_labs, in_vecs, link_grads, pred_grads)
-        # Each link will be observed twice in an epoch
-        for m in link_grads:
-            m /= 2
-        return link_grads, pred_grads
+            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, in_labs, in_vecs, link_grads, pred_grads, link_counts)
+        return link_grads, pred_grads, link_counts
     
     # Gradient descent
     
@@ -138,7 +136,7 @@ class TrainingSetup():
     
     # Batch training
     
-    def train_batch(self, pos_batch, pos_ents, neg_preds, neg_batch, neg_ents):
+    def train_batch(self, pos_batch, pos_ents, neg_preds, neg_batch, neg_ents, neg_link_counts):
         """
         Train the model on a minibatch
         :param pos_batch: list (from data) of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
@@ -146,6 +144,7 @@ class TrainingSetup():
         :param neg_preds: matrix of sampled negative predicates
         :param neg_batch: list (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
         :param neg_ents: matrix of particle entity vectors
+        :param neg_link_counts: how many times each link is observed
         """
         # Resample latent variables
         for _ in range(self.ent_steps):
@@ -155,15 +154,20 @@ class TrainingSetup():
         self.resample_background_batch(neg_batch, neg_ents)
         
         # Observe gradients
-        link_dels, pred_dels, = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
+        link_dels, pred_dels, link_counts = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
         neg_link_dels = self.observe_particle_batch(neg_batch, neg_ents)
         
         # Average gradients by batch size
-        # (Note that this assumes positive and negative links are balanced)
-        for delta in link_dels + pred_dels:
-            delta /= len(pos_batch)
+        # (this is a constant factor, so can be ignored...)
+        #for delta in link_dels + pred_dels:
+        #    delta /= len(pos_batch)
+        
+        # Balance particle links with observed links
+        # Reshaping is necessary for broadcasting...
+        # If link matrices are of different shapes, this needs to be handled differently
+        link_ratio = (link_counts / neg_link_counts).reshape(-1,1,1)
         for i, delta in enumerate(neg_link_dels):
-            link_dels[i] -= delta / len(neg_batch)
+            link_dels[i] -= delta * link_ratio
         
         # Descend
         preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
