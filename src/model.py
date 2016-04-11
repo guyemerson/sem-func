@@ -1,31 +1,12 @@
-from math import sqrt, exp
-from numpy import array, random, dot, zeros, zeros_like, outer, arange, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
+from math import exp
+from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
 from numpy.linalg import norm
-import pickle, numpy as np
-from multiprocessing import Array, Pool
 from scipy.spatial.distance import cosine
 from scipy.special import expit
 
-def make_shared(array):
-    """
-    Convert a numpy array to a multiprocessing array with numpy access
-    """
-    # Get the C type for the array
-    ctype = np.ctypeslib.as_ctypes(array)
-    while not isinstance(ctype, str): ctype = ctype._type_
-    # Create a shared array
-    shared = Array(ctype, array.flatten())
-    # Create a new numpy array from the shared array
-    flat_array = np.frombuffer(shared._obj, #._wrapper.create_memoryview(),
-                               dtype = array.dtype)
-    # Reshape the new array
-    return flat_array.reshape(array.shape)
-
-def is_verb(string):
-    """
-    Check if a predstring is for a verb or a noun
-    """
-    return string.split('_')[-2] == 'v'
+from trainingsetup import TrainingSetup, DirectTrainingSetup, AdaGradTrainingSetup  # Backward pickle compatibility @UnusedImport
+from trainer import DirectTrainer  # Backward pickle compatibility @UnusedImport
+from utils import make_shared, is_verb
 
 
 class SemFuncModel():
@@ -34,6 +15,12 @@ class SemFuncModel():
     """
     def __init__(self, *arg, **kwargs):
         raise NotImplementedError
+    
+    def get_pred_tokens(self, freq):
+        pred_toks = []  # fill with pred tokens, for sampling preds
+        for i, f in enumerate(freq):  # The original ints, not the normalised values
+            pred_toks.extend([i]*f)
+        self.pred_tokens = make_shared(array(pred_toks))
     
     # Semantic functions
     
@@ -654,10 +641,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         
         # For sampling:
         self.calc_av_pred()  # average predicate
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):
-            pred_toks.extend([i]*f)
-        self.pred_tokens = array(pred_toks)
+        self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
         print("Converting to shared memory")
         # Convert to shared memory
@@ -665,7 +649,6 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.link_wei = make_shared(self.link_wei)
         self.pred_wei = make_shared(self.pred_wei)
         self.pred_bias = make_shared(self.pred_bias)
-        self.pred_tokens = make_shared(self.pred_tokens)
         
         # Package for training setup
         self.link_weights = [self.link_wei]
@@ -810,10 +793,7 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         
         # For sampling:
         self.calc_av_pred()  # average predicate
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):  # The original ints, not the normalised values
-            pred_toks.extend([i]*f)
-        self.pred_tokens = array(pred_toks)
+        self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
         print("Converting to shared memory")
         # Convert to shared memory
@@ -822,7 +802,6 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         self.pred_embed = make_shared(self.pred_embed)
         self.pred_factor = make_shared(self.pred_factor)
         self.pred_bias = make_shared(self.pred_bias)
-        self.pred_tokens = make_shared(self.pred_tokens)
         
         # Package for training setup
         self.link_weights = [self.link_wei]
@@ -961,464 +940,3 @@ def reform_out_links(self, node, ents):
     out_labs = [l.rargname for l in node.get_out(itr=True)]
     out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
     return out_labs, out_vecs
-
-
-# Convert a triple
-def resample_background_triple(self, triple, ents):
-    """
-    Resample the latent entities for a triple,
-    using the model's background distribution.
-    :param triple: (event, agent, patient) nodeids
-    :param ents: a matrix of entity vectors (indexed by nodeid)
-    """
-    event, agent, patient = triple
-    labs = []
-    nids = [] 
-    if agent:
-        labs.append(0)
-        nids.append(agent)
-        ents[agent] = self.model.resample_background((), (), [0], [ents[event]])
-    if patient:
-        labs.append(1)
-        nids.append(patient)
-        ents[patient] = self.model.resample_background((), (), [1], [ents[event]])
-    ents[event] = self.model.resample_background(labs, nids, (), ())
-
-
-class TrainingSetup():
-    """
-    A semantic function model with a training regime.
-    Expects preprocessed data during training.
-    """
-    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio, ent_steps, pred_steps):
-        """
-        Initialise the training setup
-        :param model: the semantic function model
-        :param rate: overall training rate
-        :param rate_ratio: ratio between pred and link training rates
-        :param l1: overall L1 regularisation strength
-        :param l1_ratio: ratio between pred and link L1 regularisation strengths
-        :param l2: overall L2 regularisation strength
-        :param l2_ratio: ratio between pred and link L2 regularisation strengths
-        :param ent_steps: (default 1) number of Metropolis-Hastings steps to make when resampling latent entities
-        :param pred_steps: (default 1) number of Metropolis-Hastings steps to make when resampling negative predicates
-        """
-        # Semantic function model
-        self.model = model
-        self.link_weights = model.link_weights  # list of link weight tensors
-        self.pred_weights = model.pred_weights  # list of pred weight tensors
-        self.pred_local_weights = model.pred_local_weights
-        self.pred_global_weights = model.pred_global_weights
-        self.all_weights = self.link_weights + self.pred_weights  # all weights
-        # Hyperparameters
-        self.rate_link = rate / sqrt(rate_ratio)
-        self.rate_pred = rate * sqrt(rate_ratio)
-        self.L2_link = 2 * l2 / sqrt(l2_ratio)
-        self.L2_pred = 2 * l2 * sqrt(l2_ratio)
-        self.L1_link = l1 / sqrt(l1_ratio)
-        self.L1_pred = l1 * sqrt(l1_ratio)
-        # Metropolis-Hasting steps
-        self.ent_steps = ent_steps
-        self.pred_steps = pred_steps
-    
-    # Batch resampling
-    
-    def resample_background_batch(self, batch, ents):
-        """
-        Resample the latent entities for a batch of nodes,
-        using the model's background distribution.
-        :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
-        :param ents: a matrix of entity vectors (indexed by nodeid) 
-        """
-        for nodeid, out_labs, out_ids, in_labs, in_ids in batch:
-            out_vecs = [ents[i] for i in out_ids]
-            in_vecs = [ents[i] for i in in_ids]
-            ents[nodeid] = self.model.resample_background(out_labs, out_vecs, in_labs, in_vecs)
-    
-    def resample_conditional_batch(self, batch, ents):
-        """
-        Resample the latent entities for a batch of nodes,
-        conditioning on the nodes' preds.
-        :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
-        :param ents: a matrix of entity vectors (indexed by nodeid)
-        """
-        for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
-            vec = ents[nodeid]
-            out_vecs = [ents[i] for i in out_ids]
-            in_vecs = [ents[i] for i in in_ids]
-            self.model.resample_conditional(vec, pred, out_labs, out_vecs, in_labs, in_vecs)
-    
-    def resample_pred_batch(self, batch, ents, neg_preds):
-        """
-        Resample the negative preds for a batch of nodes,
-        conditioning on the latent entity vectors.
-        :param batch: iterable of tuples (nodeid first element)
-        :param ents: matrix of entity vectors
-        :param neg_preds: matrix of negative preds
-        """
-        for x in batch:
-            nid = x[0]
-            old_preds = neg_preds[nid]
-            vec = ents[nid]
-            for i, pred in enumerate(old_preds):
-                old_preds[i] = self.model.resample_pred(vec, pred)
-    
-    # Batch gradients
-    
-    def observe_particle_batch(self, batch, ents):
-        """
-        Calculate gradients for link weights, for a fantasy particle
-        :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
-        :param ents: a matrix of particle entity vectors  
-        :return: gradient matrices
-        """
-        gradient_matrices = [zeros_like(m) for m in self.link_weights]
-        for nodeid, out_labs, out_ids, _, _ in batch:
-            # For each node, add gradients from outgoing links
-            # (Incoming links are not included - this assumes we have all the relevant nodes)
-            vec = ents[nodeid]
-            out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices)
-        return gradient_matrices
-    
-    def observe_latent_batch(self, batch, ents, neg_preds):
-        """
-        Calculate gradients for a batch of nodes
-        :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
-        :param ents: a matrix of latent entity vectors
-        :param neg_preds: a matrix of negative samples of preds
-        :return: link gradient matrices, pred gradient matrices
-        """
-        # Initialise gradient matrices
-        link_grads = [zeros_like(m) for m in self.link_weights]
-        pred_grads = [zeros_like(m) for m in self.pred_weights]
-        for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
-            # For each node, add gradients
-            # Look up the vector, neg preds, and linked vectors
-            vec = ents[nodeid]
-            npreds = neg_preds[nodeid]
-            out_vecs = [ents[i] for i in out_ids]
-            in_vecs = [ents[i] for i in in_ids]
-            # Observe the gradient
-            self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, in_labs, in_vecs, link_grads, pred_grads)
-        # Each link will be observed twice in an epoch
-        for m in link_grads:
-            m /= 2
-        return link_grads, pred_grads
-    
-    # Gradient descent
-    
-    def descend(self, link_gradients, pred_gradients, pred_list=None):
-        """
-        Descend the gradient and apply regularisation
-        :param link_gradients: gradients for link weights
-        :param pred_gradients: gradients for pred weights
-        :param pred_list: (optional) restrict regularisation to these predicates
-        """
-        raise NotImplementedError
-    
-    # Batch training
-    
-    def train_batch(self, pos_batch, pos_ents, neg_preds, neg_batch, neg_ents):
-        """
-        Train the model on a minibatch
-        :param pos_batch: list (from data) of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
-        :param pos_ents: matrix of latent entity vectors
-        :param neg_preds: matrix of sampled negative predicates
-        :param neg_batch: list (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
-        :param neg_ents: matrix of particle entity vectors
-        """
-        # Resample latent variables
-        for _ in range(self.ent_steps):
-            self.resample_conditional_batch(pos_batch, pos_ents)
-        for _ in range(self.pred_steps):
-            self.resample_pred_batch(pos_batch, pos_ents, neg_preds)
-        self.resample_background_batch(neg_batch, neg_ents)
-        
-        # Observe gradients
-        link_dels, pred_dels, = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
-        neg_link_dels = self.observe_particle_batch(neg_batch, neg_ents)
-        
-        # Average gradients by batch size
-        # (Note that this assumes positive and negative links are balanced)
-        for delta in link_dels + pred_dels:
-            delta /= len(pos_batch)
-        for i, delta in enumerate(neg_link_dels):
-            link_dels[i] -= delta / len(neg_batch)
-        
-        # Descend
-        preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
-        self.descend(link_dels, pred_dels, preds)
-    
-    # Testing functions
-    
-    def graph_background_energy(self, nodes, ents):
-        """
-        Find the energy of a DMRS graph, given entity vectors
-        :param nodes: iterable of (nodeid, (pred,) out_labs, out_ids, in_labs, in_ids) tuples
-        :param ents: the entity vectors, indexed by nodeid
-        :return: the energy
-        """
-        links = []
-        for x in nodes:
-            start = x[0]
-            out_labs = x[-4]
-            out_ids = x[-3]
-            for i, lab in enumerate(out_labs):
-                links.append([start, out_ids[i], lab])
-        return self.model.background_energy(links, ents)
-
-
-class DirectTrainingSetup(TrainingSetup):
-    """
-    Use the gradients directly
-    """
-    def __init__(self, *args, **kwargs):
-        """
-        L1 and L2 will be used directly
-        """
-        super().__init__(*args, **kwargs)
-        
-        self.L1_link *= self.rate_link
-        self.L1_pred *= self.rate_pred
-        self.L2_link = 1 - self.L2_link * self.rate_link
-        self.L2_pred = 1 - self.L2_pred * self.rate_pred
-    
-    def descend(self, link_gradients, pred_gradients, pred_list=None):
-        """
-        Descend the gradient and apply regularisation
-        :param link_gradients: gradients for link weights
-        :param pred_gradients: gradients for pred weights
-        :param pred_list: (optional) restrict regularisation to these predicates
-        """
-        # Update from the gradient
-        for i, grad in enumerate(link_gradients):
-            self.link_weights[i] += grad * self.rate_link
-        for i, grad in enumerate(pred_gradients):
-            self.pred_weights[i] += grad * self.rate_pred
-        
-        # Apply regularisation
-        for wei in self.link_weights:
-            wei *= self.L2_link
-            wei -= self.L1_link
-        for wei in self.pred_global_weights:
-            wei *= self.L2_pred
-            wei -= self.L1_pred
-        if pred_list:
-            for wei in self.pred_local_weights:
-                for p in pred_list:
-                    wei[p] *= self.L2_pred
-                    wei[p] -= self.L1_pred
-        else:
-            for wei in self.pred_local_weights:
-                wei *= self.L2_pred
-                wei -= self.L1_pred
-        
-        # Remove negative weights
-        for wei in self.all_weights:
-            wei.clip(0, out=wei)
-        
-        # Recalculate average predicate
-        self.model.calc_av_pred()
-
-
-class AdaGradTrainingSetup(TrainingSetup):
-    """
-    Use AdaGrad
-    """
-    def __init__(self, *args, ada_decay=1, **kwargs):
-        """
-        Initialise as TrainingSetup, but also initialise shared square gradient matrices
-        """
-        super().__init__(*args, **kwargs)
-        
-        # Squared gradients
-        assert ada_decay > 0
-        assert ada_decay < 1
-        self.ada_decay = ada_decay
-        self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
-        self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]
-        
-    def descend(self, link_gradients, pred_gradients, pred_list=None):
-        """
-        Divide step lengths by the sum of the square gradients
-        """
-        for i, grad in enumerate(link_gradients):
-            # Add regularisation
-            grad -= self.L1_link
-            grad -= self.link_weights[i] * self.L2_link
-            # Increase square sums
-            self.link_sqsum[i] *= self.ada_decay
-            self.link_sqsum[i] += grad ** 2
-            # Divide by root sum square
-            grad /= self.link_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
-            # Multiply by learning rate
-            grad *= self.rate_link
-            # Descend
-            self.link_weights[i] += grad
-        
-        for i, grad in enumerate(pred_gradients):
-            if pred_list and i < len(self.pred_local_weights):
-                # Add regularisation
-                for p in pred_list:
-                    grad[p] -= self.L1_pred
-                    grad[p] -= self.pred_weights[i][p] * self.L2_pred
-            else:
-                # Add regularisation
-                grad -= self.L1_pred
-                grad -= self.pred_weights[i] * self.L2_pred
-            # Increase square sums
-            self.pred_sqsum[i] *= self.ada_decay
-            self.pred_sqsum[i] += grad ** 2
-            # Divide by root sum square
-            grad /= self.pred_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
-            # Multiply by learning rate
-            grad *= self.rate_pred
-            # Descend
-            self.pred_weights[i] += grad
-        
-        # Remove negative weights
-        for wei in self.all_weights:
-            wei.clip(0, out=wei)
-        
-        # Recalculate average predicate
-        self.model.calc_av_pred()
-
-
-class DirectTrainer():
-    """
-    A semantic function model with a training regime and data
-    """
-    def __init__(self, setup, data, particle, neg_samples):
-        """
-        Initialise the trainer
-        :param setup: semantic function model with training setup
-        :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
-        :param particle: fantasy particle of the form (nodeid, out_labs, out_ids, in_labs, in_ids), with increasing nodeids 
-        :param neg_samples: number of negative pred samples to draw for each node
-        """
-        # Training setup
-        self.setup = setup
-        self.model = setup.model
-        # Negative pred samples
-        self.NEG = neg_samples
-        # Data
-        self.filename = None
-        self.load_data(data)
-        # Fantasy particles
-        self.neg_nodes = particle
-        for i, n in enumerate(self.neg_nodes): assert i == n[0]
-        self.K = len(self.neg_nodes)
-        self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
-    
-    def load_data(self, data):
-        """
-        Load data from a list
-        :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
-        """
-        # Dicts for graphs, nodes, and pred frequencies
-        self.nodes = data
-        for i, n in enumerate(self.nodes): assert i == n[0]
-        self.N = len(self.nodes)
-        # Latent entities
-        self.ents = empty((self.N, self.model.D))
-        for i, n in enumerate(self.nodes):
-            self.ents[i] = self.model.init_vec_from_pred(n[1])
-        # Negative pred samples
-        self.neg_preds = empty((self.N, self.NEG), dtype=int)
-        for n in self.nodes:
-            self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
-    
-    def load_file(self, filehandle):
-        """
-        Load data from a file
-        :param filehandle: pickled data
-        """
-        data = pickle.load(filehandle)
-        self.load_data(data)
-        self.filename = filehandle.name
-        self.epochs = 0
-    
-    def report(self, histogram_bins, bias_histogram_bins, num_preds=5):
-        """
-        Print a summary of the current state of training the model
-        :param histogram_bins: edges of bins for non-bias weights (0 and inf will be added)
-        :param bias_histogram_bins: edges of bins for bias weights (0 and inf will be added)
-        :param num_preds: number of preds to print the nearest neighbours of
-        """
-        # Get histogram
-        histo, histo_bias = self.model.get_all_histograms(histogram_bins, bias_histogram_bins)
-        # Print to console
-        print()
-        print('File {} epoch {} complete!'.format(self.filename, self.epochs))
-        print('Weight histogram (link, then pred):')
-        print(histo)
-        print('Bias histogram (pred):')
-        print(histo_bias)
-        print('max link weights:')
-        for m in self.model.link_weights:
-            print('\t', m.max())
-        print('max global pred weights:')
-        for m in self.model.pred_global_weights:
-            print('\t', m.max())
-        print('max local pred weights:')
-        for m in self.model.pred_local_weights:
-            i_max = unravel_index(m.argmax(), m.shape)
-            print('\t', m[i_max], '\t', self.model.pred_name[i_max[0]])
-        print('avg data background E:', self.setup.graph_background_energy(self.nodes, self.ents) / self.N)
-        print('avg part background E:', self.setup.graph_background_energy(self.neg_nodes, self.neg_ents) / self.K)  # Check for new samples?
-        print('avg data pred t:', sum(self.model.prob(self.ents[n[0]], n[1]) for n in self.nodes) / self.N)
-        print('avg part pred t:', sum(self.model.prob(self.ents[n[0]], p) for n in self.nodes for p in self.neg_preds[n[0]]) / self.N / self.NEG)  # Just check different preds?
-        #print('closest preds:')
-        #for p, q in self.model.closest_pairs(12, 'parameters'):
-        #    print(p,q)
-        print('nearest neighbours:')
-        # Get frequent preds
-        if not hasattr(self, 'pred_list'):
-            self.pred_list = list(self.model.freq.argpartition(tuple(range(-1,-1-num_preds,-1)))[-num_preds:])
-        # Get the first few preds in the current file
-        self.pred_list[num_preds:] = [n[1] for n in self.nodes[:num_preds]]
-        nearest = self.model.closest_preds(self.pred_list, 3)
-        for i, p in enumerate(self.pred_list):
-            if nearest[i] is not None:
-                neighbours = ', '.join(self.model.pred_name[x] for x in nearest[i])
-            else:
-                neighbours = ''
-            print('{}: {}'.format(self.model.pred_name[p], neighbours))
-    
-    def train(self, epochs, minibatch, print_every=inf, histogram_bins=(0.05,0.2,1), bias_histogram_bins=(4,5,6,10), dump_file=None):
-        """
-        Train the model on the data
-        :param epochs: number of passes over the data
-        :param minibatch: size of a minibatch (as a number of graphs)
-        :param print_every: how many epochs should pass before printing
-            (default: don't print)
-        :param histogram_bins: edges of bins to summarise distribution of weights
-            (default: 0.05, 0.2, 1)
-        :param bias_histogram_bins: edges of bins to summarise distribution of biases
-            (default: 4, 5, 6, 10)
-        :param dump_file: (optional) file to save the trained model (dumps after printing)
-        """
-        # Indices of nodes, to be randomised
-        indices = arange(self.N)
-        for e in range(epochs):
-            # Record that another epoch has passed
-            self.epochs += 1
-            # Randomise batches
-            # (At the moment, just one batch of particles)
-            random.shuffle(indices)
-            # Take batches
-            for i in range(0, self.N, minibatch):
-                # Get the nodes for this batch
-                batch = [self.nodes[i] for i in indices[i : i+minibatch]]
-                # Train on this batch
-                self.setup.train_batch(batch, self.ents, self.neg_preds, self.neg_nodes, self.neg_ents)
-                
-            # Print regularly
-            if (e+1) % print_every == 0:
-                # Print a summary
-                self.report(histogram_bins, bias_histogram_bins)
-                # Save to file
-                if dump_file:
-                    with open(dump_file, 'wb') as f:
-                        pickle.dump(self.setup, f)
