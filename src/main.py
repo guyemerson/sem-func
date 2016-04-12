@@ -12,8 +12,8 @@ numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
 
 parser = argparse.ArgumentParser(description="Train a sem-func model")
 # Output and input
-parser.add_argument('suffix')
-parser.add_argument('-thresh', type=int, default=5)
+parser.add_argument('suffix', nargs='?', default=None)
+parser.add_argument('-thresh', type=int, default=10000)
 # Model hyperparameters
 parser.add_argument('-model', type=str, default='independent')
 parser.add_argument('-dims', type=int, default=40)
@@ -39,7 +39,7 @@ parser.add_argument('-particle', type=int, nargs=3, default=(3,2,5))
 # Training parameters
 parser.add_argument('-epochs', type=int, default=3)
 parser.add_argument('-minibatch', type=int, default=20)
-parser.add_argument('-processes', type=int, default=50)
+parser.add_argument('-processes', type=int, default=3)
 parser.add_argument('-ent_burnin', type=int, default=0)
 parser.add_argument('-pred_burnin', type=int, default=0)
 
@@ -47,7 +47,15 @@ args = parser.parse_args()
 
 # Set input and output
 DATA = '/anfs/bigdisc/gete2/wikiwoods/core-{}-nodes'.format(args.thresh)
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-{}'.format(args.thresh, args.suffix)
+
+output_template = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-{}'
+
+if args.suffix is None:
+    args.suffix = 1
+    while os.path.exists(output_template.format(args.thresh, args.suffix)+'.pkl'):
+        args.suffix += 1
+
+OUTPUT = output_template.format(args.thresh, args.suffix)
 # Save under OUTPUT.pkl and OUTPUT.aux.pkl
 
 VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'

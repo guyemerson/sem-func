@@ -9,31 +9,34 @@ def create_particle(p_full, p_agent, p_patient):
     particle = []
     nid = 0
     for _ in range(p_full):
-        particle.extend([(nid, [0,1], [nid+1,nid+2], (), ()),
-                         (nid+1, (), (), [0], [nid]),
-                         (nid+2, (), (), [1], [nid])])
+        particle.extend([(nid, [0,1], [nid+1,nid+2], [], []),
+                         (nid+1, [], [], [0], [nid]),
+                         (nid+2, [], [], [1], [nid])])
         nid += 3
     for _ in range(p_agent):
-        particle.extend([(nid, [0], [nid+1], (), ()),
-                         (nid+1, (), (), [0], [nid])])
+        particle.extend([(nid, [0], [nid+1], [], []),
+                         (nid+1, [], [], [0], [nid])])
         nid += 2
     for _ in range(p_patient):
-        particle.extend([(nid, [1], [nid+1], (), ()),
-                         (nid+1, (), (), [1], [nid])])
+        particle.extend([(nid, [1], [nid+1], [], []),
+                         (nid+1, [], [], [1], [nid])])
         nid += 2
     return particle
+
 
 class DirectTrainer():
     """
     A semantic function model with a training regime and data
     """
-    def __init__(self, setup, data, particle, neg_samples):
+    def __init__(self, setup, data, particle, neg_samples, ent_burnin=0, pred_burnin=0):
         """
         Initialise the trainer
         :param setup: semantic function model with training setup
         :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
         :param particle: fantasy particle of the form (nodeid, out_labs, out_ids, in_labs, in_ids), with increasing nodeids 
         :param neg_samples: number of negative pred samples to draw for each node
+        :param ent_burnin: (default 0) number of update steps to take for latent entities
+        :param pred_burnin: (default 0) number of update steps to take for negative preds
         """
         # Training setup
         self.setup = setup
@@ -42,7 +45,7 @@ class DirectTrainer():
         self.NEG = neg_samples
         # Data
         self.filename = None
-        self.load_data(data)
+        self.load_data(data, ent_burnin, pred_burnin)
         # Fantasy particles
         self.neg_nodes = particle
         self.neg_link_counts = zeros(self.model.L)
