@@ -391,7 +391,7 @@ class SemFuncModel():
         for p in neg_preds:
             self.observe_pred(vector, p, pred_matrices)
         for grad in pred_matrices:
-            grad.array[current_index:grad.next] /= num_preds
+            grad.array[current_index:grad.next] /= - num_preds  # negative
         # Return gradient matrices
         return link_matrices, pred_matrices, link_counts
     
