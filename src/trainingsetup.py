@@ -2,7 +2,7 @@ import pickle
 from math import sqrt
 from numpy import zeros, zeros_like, array
 
-from utils import make_shared
+from utils import make_shared, sparse_like
 
 class TrainingSetup():
     """
@@ -110,7 +110,9 @@ class TrainingSetup():
         """
         # Initialise gradient matrices
         link_grads = [zeros_like(m) for m in self.link_weights]
-        pred_grads = [zeros_like(m) for m in self.pred_weights]
+        total_preds = len(batch) * (neg_preds.shape[1] + 1)
+        pred_grads = [sparse_like(m, total_preds) for m in self.pred_local_weights]
+        pred_grads += [zeros_like(m) for m in self.pred_global_weights]
         link_counts = zeros(self.model.L)
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             # For each node, add gradients
@@ -170,8 +172,8 @@ class TrainingSetup():
             link_dels[i] -= delta * link_ratio
         
         # Descend
-        preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
-        self.descend(link_dels, pred_dels, preds)
+        #preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
+        self.descend(link_dels, pred_dels, neg_preds.shape[1]+1)
     
     # Testing functions
     
@@ -281,7 +283,7 @@ class AdaGradTrainingSetup(TrainingSetup):
         self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
         self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]
         
-    def descend(self, link_gradients, pred_gradients, pred_list=None):
+    def descend(self, link_gradients, pred_gradients, n_pred):
         """
         Divide step lengths by the sum of the square gradients
         """
@@ -300,24 +302,32 @@ class AdaGradTrainingSetup(TrainingSetup):
             self.link_weights[i] += grad
         
         for i, grad in enumerate(pred_gradients):
-            if pred_list and i < len(self.pred_local_weights):
+            if n_pred and i < len(self.pred_local_weights):
                 # Add regularisation
-                for p in pred_list:
-                    grad[p] -= self.L1_pred
-                    grad[p] -= self.pred_weights[i][p] * self.L2_pred
+                grad.array[::n_pred] -= self.L1_pred
+                grad.array[::n_pred] -= self.pred_weights[i][grad.indices[::n_pred]] * self.L2_pred
+                # Increase square sums
+                self.pred_sqsum[i] *= self.ada_decay
+                self.pred_sqsum[i][grad.indices] += grad.array ** 2
+                # Divide by root sum square
+                grad.array /= self.pred_sqsum[i][grad.indices].clip(10**-12) ** 0.5  # Prevent zero-division errors
+                # Multiply by learning rate
+                grad.array *= self.rate_pred
+                # Descend
+                grad.add_to(self.pred_weights[i])
             else:
                 # Add regularisation
                 grad -= self.L1_pred
                 grad -= self.pred_weights[i] * self.L2_pred
-            # Increase square sums
-            self.pred_sqsum[i] *= self.ada_decay
-            self.pred_sqsum[i] += grad ** 2
-            # Divide by root sum square
-            grad /= self.pred_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
-            # Multiply by learning rate
-            grad *= self.rate_pred
-            # Descend
-            self.pred_weights[i] += grad
+                # Increase square sums
+                self.pred_sqsum[i] *= self.ada_decay
+                self.pred_sqsum[i] += grad ** 2
+                # Divide by root sum square
+                grad /= self.pred_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
+                # Multiply by learning rate
+                grad *= self.rate_pred
+                # Descend
+                self.pred_weights[i] += grad
         
         # Remove negative weights
         for wei in self.all_weights:

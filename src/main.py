@@ -172,5 +172,5 @@ save()
 
 """
 import cProfile
-cProfile.runctx('...', globals(), locals())
+cProfile.runctx('train_on_file(os.listdir(DATA)[0])', globals(), locals())
 """

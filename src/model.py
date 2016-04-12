@@ -384,13 +384,14 @@ class SemFuncModel():
         # ...from the pred:
         self.observe_pred(vector, pred, pred_matrices)
         # ...from the negative preds:
+        
+        # This currently only works if all matrices are SparseRows objects
         num_preds = neg_preds.shape[0]
-        neg_pred_matrices = [zeros_like(m) for m in self.pred_weights]
+        current_index = pred_matrices[0].next
         for p in neg_preds:
-            self.observe_pred(vector, p, neg_pred_matrices)
-        for i, grad in enumerate(neg_pred_matrices):
-            grad /= num_preds
-            pred_matrices[i] -= grad
+            self.observe_pred(vector, p, pred_matrices)
+        for grad in pred_matrices:
+            grad.array[current_index:grad.next] /= num_preds
         # Return gradient matrices
         return link_matrices, pred_matrices, link_counts
     
@@ -701,8 +702,11 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         gradient_matrix, bias_gradient_vector = matrices
         # Calculate gradients
         factor = 1 - self.prob(vector, pred)
-        gradient_matrix[pred] += vector * factor
-        bias_gradient_vector[pred] += - factor  # all biases assumed to be negative
+        
+        # we can just set the gradients, since we're storing each separately
+        # This currently only works if all matrices are SparseRows objects 
+        gradient_matrix[pred] = vector * factor
+        bias_gradient_vector[pred] = - factor  # all biases assumed to be negative
         return matrices
     
     def cosine_of_parameters(self, pred1, pred2):

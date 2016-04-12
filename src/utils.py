@@ -30,3 +30,31 @@ def sub_namespace(namespace, attrs):
     for x in attrs:
         subspace[x] = getattr(namespace, x)
     return subspace
+
+class SparseRows():
+    """
+    Sparse rows
+    """
+    __slots__ = ('indices', 'array', 'next')
+    
+    def __init__(self, shape):
+        self.indices = np.empty(shape[0], dtype='int')
+        self.array = np.empty(shape)
+        self.next = 0
+    
+    def __setitem__(self, key, value):
+        self.indices[self.next] = key
+        self.array[self.next] = value
+        self.next += 1 
+    
+    def add_to(self, other):
+        assert self.next == self.indices.shape[0]
+        other[self.indices] += self.array
+
+def sparse_like(matrix, num_rows):
+    """
+    Create a SparseRows object based on a matrix, with a specified number of rows
+    """
+    shape = list(matrix.shape)
+    shape[0] = num_rows
+    return SparseRows(shape)
