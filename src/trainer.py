@@ -51,7 +51,7 @@ class DirectTrainer():
         self.neg_link_counts = zeros(self.model.L)
         for i, n in enumerate(self.neg_nodes):
             assert i == n[0]
-            for label in n[1] + n[3]:
+            for label in n[1]:  # Count outgoing links only, and assume we have entire graphs (similarly, only outgoing links are observed)
                 self.neg_link_counts[label] += 1
         self.K = len(self.neg_nodes)
         self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))

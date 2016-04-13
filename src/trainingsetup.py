@@ -1,4 +1,4 @@
-import pickle
+import pickle, os
 from math import sqrt
 from numpy import zeros, zeros_like, array
 
@@ -194,11 +194,11 @@ class TrainingSetup():
         return self.model.background_energy(links, ents)
     
     @staticmethod
-    def load(cls, fname, with_tokens=False):
+    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', with_tokens=False):
         """
         Load a TrainingSetup instance from a file
         """
-        with open(fname, 'rb') as f:
+        with open(os.path.join(directory, fname)+'.pkl', 'rb') as f:
             setup = pickle.load(f)
         if isinstance(setup.model.pred_name, str):
             with open(setup.model.pred_name, 'rb') as f:
@@ -210,7 +210,10 @@ class TrainingSetup():
             if with_tokens:
                 setup.model.get_pred_tokens(freq)
         
-        return setup
+        with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
+            aux_info = pickle.load(f)
+        
+        return setup, aux_info
 
 
 class DirectTrainingSetup(TrainingSetup):
