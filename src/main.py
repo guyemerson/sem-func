@@ -1,5 +1,5 @@
 import sys, os, pickle, numpy, argparse
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool, Manager, Process
 from time import sleep
 from copy import copy
 
@@ -31,17 +31,17 @@ parser.add_argument('-l2_ratio', type=float, default=1)
 parser.add_argument('-l1', type=float, default=0.001)
 parser.add_argument('-l1_ratio', type=float, default=1)
 parser.add_argument('-ent_steps', type=int, default=10)
-parser.add_argument('-pred_steps', type=int, default=2)
-parser.add_argument('-ada_decay', type=float, default=1-10**-6)
+parser.add_argument('-pred_steps', type=int, default=1)
+parser.add_argument('-ada_decay', type=float, default=1-10**-8)
 # Negative sample parameters
 parser.add_argument('-neg_samples', type=int, default=5)
 parser.add_argument('-particle', type=int, nargs=3, default=(3,2,5))
 # Training parameters
 parser.add_argument('-epochs', type=int, default=3)
 parser.add_argument('-minibatch', type=int, default=20)
-parser.add_argument('-processes', type=int, default=3)
-parser.add_argument('-ent_burnin', type=int, default=0)
-parser.add_argument('-pred_burnin', type=int, default=0)
+parser.add_argument('-processes', type=int, default=50)
+parser.add_argument('-ent_burnin', type=int, default=10)
+parser.add_argument('-pred_burnin', type=int, default=2)
 
 args = parser.parse_args()
 
@@ -136,6 +136,7 @@ def train_on_file(fname):
     Train on a single file
     (without saving to disk)
     """
+    global trainer
     print(fname)
     with open(os.path.join(DATA, fname), 'rb') as f:
         trainer.load_file(f,
@@ -150,16 +151,56 @@ def save():
     Save trained model to disk
     """
     with open(OUTPUT+'.pkl', 'wb') as f:
+        # Remove things that weren't trained
         crucial = copy(setup)
         crucial.model = copy(crucial.model)
         crucial.model.pred_tokens = FREQ
         crucial.model.freq = FREQ
         crucial.model.pred_name = VOCAB
+        # Remove queues (which can't be pickled)
+        crucial.link_update_queues = None
+        crucial.pred_update_queues = None
+        if args.setup == 'adagrad':
+            crucial.link_sqsum_queues = None
+            crucial.pred_sqsum_queues = None
+        # Save the file!
         pickle.dump(crucial, f)
     with open(OUTPUT+'.aux.pkl', 'wb') as f:
         actual_info = copy(aux_info)
         actual_info['completed_files'] = completed_files._getvalue()
         pickle.dump(actual_info, f)
+
+# Workers to update the shared weights from queued gradients
+
+assert args.setup == 'adagrad'
+
+for i, q in enumerate(setup.link_update_queues):
+    weight = setup.link_weights[i]
+    sqsum = setup.link_sqsum[i]
+    def update():
+        global weight, sqsum
+        while True:
+            sqgrad, step = q.get()
+            sqsum += sqgrad
+            weight += step.clip(-weight)
+    worker = Process(target=update)
+    worker.start()
+
+for i, q in enumerate(setup.pred_update_queues):
+    weight = setup.pred_weights[i]
+    sqsum = setup.pred_sqsum[i]
+    if i < len(setup.pred_local_weights):
+        def update():
+            global weight, sqsum
+            while True:
+                sqgrad, step = q.get()
+                assert step.next == step.indices.shape[0]
+                sqsum[step.indices] += sqgrad
+                weight[step.indices] += step.array.clip(-weight[step.indices])
+    else:
+        raise NotImplementedError
+    worker = Process(target=update)
+    worker.start()
 
 # Give different files to different processes
 with Pool(args.processes) as p:
@@ -168,6 +209,10 @@ with Pool(args.processes) as p:
     while not res.ready():
         save()
         sleep(60)
+while not (all(q.empty() for q in setup.link_update_queues) and \
+           all(q.empty() for q in setup.pred_update_queues)):
+    save()
+    sleep(60)
 save()
 
 """

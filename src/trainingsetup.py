@@ -1,6 +1,7 @@
 import pickle, os
 from math import sqrt
 from numpy import zeros, zeros_like, array
+from multiprocessing import Queue
 
 from utils import make_shared, sparse_like
 
@@ -39,6 +40,9 @@ class TrainingSetup():
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
+        # Queues for weight updates
+        self.link_update_queues = [Queue() for x in self.link_weights]
+        self.pred_update_queues = [Queue() for x in self.pred_weights]
     
     # Batch resampling
     
@@ -209,6 +213,10 @@ class TrainingSetup():
             setup.model.freq = array(freq) / sum(freq)
             if with_tokens:
                 setup.model.get_pred_tokens(freq)
+        if setup.link_update_queues is None:
+            setup.link_update_queues = [Queue() for x in setup.link_weights]
+        if setup.pred_update_queues is None:
+            setup.pred_update_queues = [Queue() for x in setup.pred_weights]
         
         with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
             aux_info = pickle.load(f)
@@ -294,47 +302,30 @@ class AdaGradTrainingSetup(TrainingSetup):
             # Add regularisation
             grad -= self.L1_link
             grad -= self.link_weights[i] * self.L2_link
-            # Increase square sums
-            self.link_sqsum[i] *= self.ada_decay
-            self.link_sqsum[i] += grad ** 2
+            # Calculate square
+            sq = grad ** 2
             # Divide by root sum square
-            grad /= self.link_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
+            grad /= (self.link_sqsum[i] + sq).clip(10**-12) ** 0.5  # Prevent zero-division errors
             # Multiply by learning rate
             grad *= self.rate_link
-            # Descend
-            self.link_weights[i] += grad
+            # Descend (or rather, add to queue)
+            self.link_update_queues[i].put((sq, grad))
         
         for i, grad in enumerate(pred_gradients):
             if n_pred and i < len(self.pred_local_weights):
                 # Add regularisation
                 grad.array[::n_pred] -= self.L1_pred
                 grad.array[::n_pred] -= self.pred_weights[i][grad.indices[::n_pred]] * self.L2_pred
-                # Increase square sums
-                self.pred_sqsum[i] *= self.ada_decay
-                self.pred_sqsum[i][grad.indices] += grad.array ** 2
+                # Increase square sums (or rather, add to queue)
+                sq = grad.array ** 2
                 # Divide by root sum square
-                grad.array /= self.pred_sqsum[i][grad.indices].clip(10**-12) ** 0.5  # Prevent zero-division errors
+                grad.array /= (self.pred_sqsum[i][grad.indices] + sq).clip(10**-12) ** 0.5  # Prevent zero-division errors
                 # Multiply by learning rate
                 grad.array *= self.rate_pred
-                # Descend
-                grad.add_to(self.pred_weights[i])
             else:
-                # Add regularisation
-                grad -= self.L1_pred
-                grad -= self.pred_weights[i] * self.L2_pred
-                # Increase square sums
-                self.pred_sqsum[i] *= self.ada_decay
-                self.pred_sqsum[i] += grad ** 2
-                # Divide by root sum square
-                grad /= self.pred_sqsum[i].clip(10**-12) ** 0.5  # Prevent zero-division errors
-                # Multiply by learning rate
-                grad *= self.rate_pred
-                # Descend
-                self.pred_weights[i] += grad
-        
-        # Remove negative weights
-        for wei in self.all_weights:
-            wei.clip(0, out=wei)
+                raise NotImplementedError
+            # Descend (or rather, add to queue)
+            self.pred_update_queues[i].put((sq, grad))
         
         # Recalculate average predicate
         self.model.calc_av_pred()
