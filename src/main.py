@@ -1,5 +1,5 @@
 import sys, os, pickle, numpy, argparse
-from multiprocessing import Pool, Manager, Process
+from multiprocessing import Pool, Manager, Process, Queue
 from time import sleep
 from copy import copy
 
@@ -202,17 +202,38 @@ for i, q in enumerate(setup.pred_update_queues):
     worker = Process(target=update)
     worker.start()
 
-# Give different files to different processes
-with Pool(args.processes) as p:
-    res = p.map_async(train_on_file, sorted(os.listdir(DATA)))
-    # While waiting for training to finish, save regularly
-    while not res.ready():
-        save()
-        sleep(60)
-while not (all(q.empty() for q in setup.link_update_queues) and \
-           all(q.empty() for q in setup.pred_update_queues)):
+# Workers to process training data
+
+file_queue = Queue()
+for fname in sorted(os.listdir(DATA)):
+    file_queue.put(fname)
+for _ in range(args.processes):
+    file_queue.put(None)
+
+def train():
+    while True:
+        fname = file_queue.get()
+        if fname is not None:
+            train_on_file(fname)
+        else:
+            break
+    #print('worker done')
+
+training_workers = []
+for _ in range(args.processes):
+    worker = Process(target=train)
+    worker.start()
+    training_workers.append(worker)
+
+while (not file_queue.empty()) or any(w.is_alive() for w in training_workers):
     save()
     sleep(60)
+while not (all(q.empty() for q in setup.link_update_queues) and \
+           all(q.empty() for q in setup.pred_update_queues)):
+    print('Waiting for updates to finish...')
+    save()
+    sleep(60)
+print('Training complete')
 save()
 
 """
