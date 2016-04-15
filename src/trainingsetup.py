@@ -26,6 +26,8 @@ class TrainingSetup():
         # Semantic function model
         self.model = model
         self.link_weights = model.link_weights  # list of link weight tensors
+        self.link_local_weights = model.link_local_weights
+        self.link_global_weights = model.link_global_weights
         self.pred_weights = model.pred_weights  # list of pred weight tensors
         self.pred_local_weights = model.pred_local_weights
         self.pred_global_weights = model.pred_global_weights
@@ -172,8 +174,12 @@ class TrainingSetup():
         # Reshaping is necessary for broadcasting...
         # If link matrices are of different shapes, this needs to be handled differently
         link_ratio = (link_counts / neg_link_counts).reshape(-1,1,1)
+        node_ratio = len(pos_batch) / len(neg_batch)
         for i, delta in enumerate(neg_link_dels):
-            link_dels[i] -= delta * link_ratio
+            if i < len(self.link_local_weights):
+                link_dels[i] -= delta * link_ratio
+            else:
+                link_dels[i] -= delta * node_ratio
         
         # Descend
         #preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
@@ -232,6 +238,8 @@ class DirectTrainingSetup(TrainingSetup):
         """
         L1 and L2 will be used directly
         """
+        raise NotImplementedError
+        
         super().__init__(*args, **kwargs)
         
         self.L1_link *= self.rate_link

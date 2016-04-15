@@ -1,4 +1,4 @@
-from math import exp
+from math import exp, log
 from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
@@ -45,7 +45,7 @@ class SemFuncModel():
         :return: a sampled entity vector
         """
         # The negative energy of each component depends on the links 
-        negenergy = zeros(self.D)
+        negenergy = - self.ent_bias
         for i, label in enumerate(out_labels):
             # 1st axis of link_wei[label]
             negenergy += dot(self.link_wei[label], out_vectors[i])
@@ -210,7 +210,17 @@ class SemFuncModel():
         
         # Calculate Metropolis-Hastings ratio
         # First, probability of each predicate being applicable:
-        ratio = self.prob(new_ent, pred) / self.prob(old_ent, pred)
+        new_prob = self.prob(new_ent, pred)
+        old_prob = self.prob(old_ent, pred)
+        
+        if old_prob == 0:
+            print(pred)
+            print(old_ent)
+            for wei in self.pred_local_weights:
+                print(wei[pred])
+            raise Exception('prob 0!')
+        
+        ratio = new_prob / old_prob
         
         # Next, background energy of entities:
         negenergy = 0
@@ -224,7 +234,7 @@ class SemFuncModel():
         if chosen:
             # Finally, weighted number of other predicates that are true:
             # (Use an approximation, rather than summing over all predicates...)
-            negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])
+            negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])  #!# extra param
         
         ratio *= exp(negenergy)
         
@@ -277,11 +287,13 @@ class SemFuncModel():
         if matrices is None:
             matrices = [zeros_like(m) for m in self.link_weights]
         # Unpack matrices
-        gradient_matrix, = matrices
+        gradient_matrix, bias_grad = matrices
         # Calculate gradient for each link
         for i, label in enumerate(out_labels):
             gradient_matrix[label] += outer(vector, out_vectors[i])
-        return gradient_matrix,
+        # Calculate gradient for bias terms
+        bias_grad -= vector  # all biases assumed to be negative
+        return matrices
     
     def observe_links(self, vector, out_labels, out_vectors, in_labels, in_vectors, matrices=None, link_counts=None):
         """
@@ -302,15 +314,17 @@ class SemFuncModel():
         if link_counts is None:
             link_counts = zeros(self.L)
         # Unpack matrices
-        gradient_matrix, = matrices
-        # Calculate gradient for each link
+        gradient_matrix, bias_grad = matrices
+        # Calculate gradient for each link, and count links
         for i, label in enumerate(out_labels):
             gradient_matrix[label] += outer(vector, out_vectors[i])
             link_counts[label] += 1
         for i, label in enumerate(in_labels):
             gradient_matrix[label] += outer(in_vectors[i], vector)
             link_counts[label] += 1
-        return gradient_matrix, link_counts
+        # Calculate gradient for bias terms
+        bias_grad -= vector  # all biases assumed to be negative
+        return matrices, link_counts
     
     def observe_pred(self, vector, pred, matrices=None):
         """
@@ -626,12 +640,17 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.C = card
         
         # Trained weights
+        # Initialise link weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
-        mid = int(dims/2)
-        agent_high = int(dims * 0.8)
-        patient_low = int(dims * 0.7)
-        self.link_wei[0, :mid, mid:agent_high] = 0.3
+        #!# Init settings for links are not yet controllable with parameters
+        mid = int(dims/2) #!# N/V proportion
+        agent_high = int(dims * 0.8) #!# agent proportion
+        patient_low = int(dims * 0.7) #!# patient proportion
+        self.link_wei[0, :mid, mid:agent_high] = 0.3 #!# initial strength
         self.link_wei[1, :mid, patient_low:] = 0.3
+        self.ent_bias = zeros(self.D)
+        self.ent_bias += log(self.D/self.C - 1) #!# initial bias (currently so that expit(bias) = C/D)
+        # Initialise pred weights
         if init_card is None: init_card = dims/2
         self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
         for i,p in enumerate(preds):
@@ -656,17 +675,21 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         # Convert to shared memory
         self.freq = make_shared(self.freq)
         self.link_wei = make_shared(self.link_wei)
+        self.ent_bias = make_shared(self.ent_bias)
         self.pred_wei = make_shared(self.pred_wei)
         self.pred_bias = make_shared(self.pred_bias)
         
         # Package for training setup
-        self.link_weights = [self.link_wei]
+        self.link_local_weights = [self.link_wei]
+        self.link_global_weights = [self.ent_bias]
+        self.link_weights = self.link_local_weights + self.link_global_weights
         self.pred_local_weights = [self.pred_wei,
                                    self.pred_bias]
         self.pred_global_weights= []
         self.pred_weights = self.pred_local_weights + self.pred_global_weights
         
-        self.bias_weights = [self.pred_bias]
+        self.bias_weights = [self.ent_bias,
+                             self.pred_bias]
         self.normal_weights=[self.link_wei,
                              self.pred_wei]
     
@@ -749,7 +772,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
             dist = nan_to_num(dist)
             # The closest pred will have the second largest dot product
             # (Largest is the pred itself)
-            indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
+            indices = dist.argpartition(tuple(range(-1-number,0)))[-1-number:-1]
             res.append(indices)
         return res
 
@@ -771,6 +794,8 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
         """
+        raise NotImplementedError
+        
         print("Initialising model")
         
         # Names for human readability
