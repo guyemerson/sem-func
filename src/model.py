@@ -223,7 +223,7 @@ class SemFuncModel():
         ratio = new_prob / old_prob
         
         # Next, background energy of entities:
-        negenergy = 0
+        negenergy = self.ent_bias[old_i] - self.ent_bias[new_i]
         for n, label in enumerate(out_labels):
             negenergy += dot(self.link_wei[label, new_i, :], out_vectors[n])
             negenergy -= dot(self.link_wei[label, old_i, :], out_vectors[n])
@@ -448,7 +448,7 @@ class SemFuncModel():
         :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: a generator of entity vectors
         """
-        v = self.init_vec_from_pred(pred)
+        v = self.init_vec_from_pred(pred)  #!# Not currently controlling high and low limits
         for _ in range(max(0, burnin-interval)):
             self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
         for _ in range(samples):
@@ -751,7 +751,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :param high: (default 0.8) the maximum non-sparse probability of each component
         :return: the vector
         """
-        prob = self.pred_wei[pred].clip(low, high)
+        prob = self.pred_wei[pred].clip(low, high)  # Use ent bias?
         return self.sample_card_restr(prob)
     
     def closest_preds(self, preds, number=1):
