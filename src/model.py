@@ -4,8 +4,6 @@ from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
 
-from trainingsetup import TrainingSetup, DirectTrainingSetup, AdaGradTrainingSetup  # Backward pickle compatibility @UnusedImport
-from trainer import DirectTrainer  # Backward pickle compatibility @UnusedImport
 from utils import make_shared, is_verb
 
 

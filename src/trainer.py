@@ -1,5 +1,10 @@
-import pickle
+import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
+from copy import copy
+from multiprocessing import Manager, Process, Queue
+from time import sleep
+
+from utils import sub_namespace
 
 def create_particle(p_full, p_agent, p_patient):
     """
@@ -24,13 +29,13 @@ def create_particle(p_full, p_agent, p_patient):
     return particle
 
 
-class DirectTrainer():
+class DataInterface():
     """
     A semantic function model with a training regime and data
     """
     def __init__(self, setup, data, particle, neg_samples, ent_burnin=0, pred_burnin=0):
         """
-        Initialise the trainer
+        Initialise the data interface
         :param setup: semantic function model with training setup
         :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
         :param particle: fantasy particle of the form (nodeid, out_labs, out_ids, in_labs, in_ids), with increasing nodeids 
@@ -175,3 +180,146 @@ class DirectTrainer():
                 if dump_file:
                     with open(dump_file, 'wb') as f:
                         pickle.dump(self.setup, f)
+
+class Trainer():
+    """
+    Handle processes during training
+    """
+    def __init__(self, interface, data_dir, output_name, processes, epochs, minibatch, ent_burnin, pred_burnin):
+        """
+        Initialise the trainer
+        :param interface: DataInterface object
+        :param data_dir: directory including data files
+        :param output_name: name for output files (without file extension)
+        :param processes: number of processes
+        :param epochs: number of passes over each data point
+        :param minibatch: number of nodes in each minibatch
+        :param ent_burnin: number of Metropolis-Hastings steps to take when initialising entities
+        :param pred_burnin: number of Metropolis-Hastings steps to take when initialising negative preds
+        """
+        self.interface = interface
+        self.setup = interface.setup
+        self.model = interface.model
+        self.data_dir = data_dir
+        self.output_name = output_name
+        self.processes = processes
+        self.epochs = epochs
+        self.minibatch = minibatch
+        self.ent_burnin = ent_burnin
+        self.pred_burnin = pred_burnin
+        
+        # Aux info (outside of setup)
+        self.aux_info = sub_namespace(self, ["epochs",
+                                             "minibatch",
+                                             "processes",
+                                             "ent_burnin",
+                                             "pred_burnin"])
+        self.aux_info["neg_samples"] = self.interface.NEG
+        self.aux_info["particle"] = self.interface.neg_nodes
+        self.completed_file_manager = Manager()
+        self.completed_files = self.completed_file_manager.list()
+        
+    # Functions for multiprocessing
+    
+    def train_on_file(self, fname):
+        """
+        Train on a single file
+        (without saving to disk)
+        """
+        print(fname)
+        with open(os.path.join(self.data_dir, fname), 'rb') as f:
+            self.interface.load_file(f,
+                                     ent_burnin = self.ent_burnin,
+                                     pred_burnin = self.pred_burnin)
+        self.interface.train(epochs = self.epochs,
+                             minibatch = self.minibatch)
+        self.completed_files.append(fname)
+        
+    def start(self):
+        """
+        Begin training
+        """
+        # Workers to update the shared weights from queued gradients
+        
+        for i, q in enumerate(self.setup.link_update_queues):
+            def update():
+                weight = self.setup.link_weights[i]
+                sqsum = self.setup.link_sqsum[i]
+                while True:
+                    sqgrad, step = q.get()
+                    sqsum += sqgrad
+                    weight += step.clip(-weight)
+            worker = Process(target=update)
+            worker.start()
+        
+        for i, q in enumerate(self.setup.pred_update_queues):
+            if i < len(self.setup.pred_local_weights):
+                def update():
+                    weight = self.setup.pred_weights[i]
+                    sqsum = self.setup.pred_sqsum[i]
+                    while True:
+                        sqgrad, step = q.get()
+                        assert step.next == step.indices.shape[0]
+                        sqsum[step.indices] += sqgrad
+                        weight[step.indices] += step.array.clip(-weight[step.indices])
+            else:
+                raise NotImplementedError
+            worker = Process(target=update)
+            worker.start()
+        
+        # Workers to process training data
+        
+        file_queue = Queue()
+        for fname in sorted(os.listdir(self.data_dir)):
+            file_queue.put(fname)
+        for _ in range(self.processes):
+            file_queue.put(None)
+        
+        def train():
+            while True:
+                fname = file_queue.get()
+                if fname is not None:
+                    self.train_on_file(fname)
+                else:
+                    break
+            #print('worker done')
+        
+        training_workers = []
+        for _ in range(self.processes):
+            worker = Process(target=train)
+            worker.start()
+            training_workers.append(worker)
+        
+        while (not file_queue.empty()) or any(w.is_alive() for w in training_workers):
+            self.save()
+            sys.stdout.flush()
+            sleep(60)
+        while not (all(q.empty() for q in self.setup.link_update_queues) and \
+                   all(q.empty() for q in self.setup.pred_update_queues)):
+            print('Waiting for updates to finish...')
+            self.save()
+            sys.stdout.flush()
+            sleep(60)
+        print('Training complete')
+        self.save()
+    
+    def save(self):
+        """
+        Save trained model to disk
+        """
+        with open(self.output_name+'.pkl', 'wb') as f:
+            # Remove things that weren't trained
+            crucial = copy(self.setup)
+            crucial.model = copy(crucial.model)
+            crucial.model.pred_tokens = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'  #!# ...
+            crucial.model.freq = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
+            crucial.model.pred_name = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
+            # Remove queues (which can't be pickled)
+            crucial.link_update_queues = None
+            crucial.pred_update_queues = None
+            # Save the file!
+            pickle.dump(crucial, f)
+        with open(self.output_name+'.aux.pkl', 'wb') as f:
+            actual_info = copy(self.aux_info)
+            actual_info['completed_files'] = self.completed_files._getvalue()
+            pickle.dump(actual_info, f)

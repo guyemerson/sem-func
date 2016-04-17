@@ -26,10 +26,13 @@ def sub_namespace(namespace, attrs):
     """
     Get part of a namespace, as a dict
     """
-    subspace = {}
-    for x in attrs:
-        subspace[x] = getattr(namespace, x)
-    return subspace
+    return {x:getattr(namespace, x) for x in attrs}
+
+def sub_dict(dictionary, keys):
+    """
+    Get part of a dict
+    """
+    return {x:dictionary[x] for x in keys}
 
 class SparseRows():
     """
