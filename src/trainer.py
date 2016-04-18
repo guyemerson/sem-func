@@ -246,9 +246,13 @@ class Trainer():
                 weight = self.setup.link_weights[i]
                 sqsum = self.setup.link_sqsum[i]
                 while True:
-                    sqgrad, step = q.get()
-                    sqsum += sqgrad
-                    weight += step.clip(-weight)
+                    item = q.get()
+                    if item is not None:
+                        sqgrad, step = item
+                        sqsum += sqgrad
+                        weight += step.clip(-weight)
+                    else:
+                        break
             worker = Process(target=update)
             worker.start()
         
@@ -258,10 +262,14 @@ class Trainer():
                     weight = self.setup.pred_weights[i]
                     sqsum = self.setup.pred_sqsum[i]
                     while True:
-                        sqgrad, step = q.get()
-                        assert step.next == step.indices.shape[0]
-                        sqsum[step.indices] += sqgrad
-                        weight[step.indices] += step.array.clip(-weight[step.indices])
+                        item = q.get()
+                        if item is not None:
+                            sqgrad, step = item
+                            assert step.next == step.indices.shape[0]
+                            sqsum[step.indices] += sqgrad
+                            weight[step.indices] += step.array.clip(-weight[step.indices])
+                        else:
+                            break
             else:
                 raise NotImplementedError
             worker = Process(target=update)
@@ -294,6 +302,10 @@ class Trainer():
             self.save()
             sys.stdout.flush()
             sleep(60)
+        for q in self.setup.link_update_queues:
+            q.put(None)
+        for q in self.setup.pred_update_queues:
+            q.put(None)
         while not (all(q.empty() for q in self.setup.link_update_queues) and \
                    all(q.empty() for q in self.setup.pred_update_queues)):
             print('Waiting for updates to finish...')
