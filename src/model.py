@@ -117,33 +117,40 @@ class SemFuncModel():
         vec = empty(self.D, dtype=bool_)  # Output vector
         aux = self.C  # Number of components still to come
         # Iteratively sample
-        for i in range(self.D-1, -1, -1):  # [D-1, D-2, ..., 0] 
-            if aux == i+1:  # All remaining components are on
-                vec[:i+1] = 1  # [0, ..., i]
-                break
-            elif aux == 0:  # All remaining components are off
-                vec[:i+1] = 0
-                break
-            else:
-                # Unnormalised probabilities of being on or off:
-                p = prob[i]
-                ein = p * intermed[i-1][aux-1]
-                aus = (1-p) * intermed[i-1][aux]
-                if ein == 0 and aus == 0:
-                    print(prob)
-                    print(intermed)
-                    print(i, aux)
-                    raise Exception('div zero!')
-                # Probability of being on:
-                on = ein/(ein+aus)
-                # Random sample:
-                if random.binomial(1, on):
-                    # Update vector and count
-                    vec[i] = 1
-                    aux -= 1
+        try:
+            for i in range(self.D-1, -1, -1):  # [D-1, D-2, ..., 0] 
+                if aux == i+1:  # All remaining components are on
+                    vec[:i+1] = 1  # [0, ..., i]
+                    break
+                elif aux == 0:  # All remaining components are off
+                    vec[:i+1] = 0
+                    break
                 else:
-                    # Update vector
-                    vec[i] = 0
+                    # Unnormalised probabilities of being on or off:
+                    p = prob[i]
+                    ein = p * intermed[i-1][aux-1]
+                    aus = (1-p) * intermed[i-1][aux]
+                    if ein == 0 and aus == 0:
+                        raise Exception('div zero!')
+                    # Probability of being on:
+                    on = ein/(ein+aus)
+                    # Random sample:
+                    if random.binomial(1, on):
+                        # Update vector and count
+                        vec[i] = 1
+                        aux -= 1
+                    else:
+                        # Update vector
+                        vec[i] = 0
+        except Exception as e:  # If too many components have high probs (giving underflow errors), just take the highest
+            if e.args[0] != 'div zero!':
+                raise e
+            print('div zero!')
+            print(prob)
+            print(intermed[-1].sum())
+            print(i, aux)
+            vec[:] = 0
+            vec[prob.argpartition(-self.C)[-self.C:]] = 1
         return vec
     
     def propose_ent(self, ent):
