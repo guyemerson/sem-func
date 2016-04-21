@@ -1,5 +1,5 @@
 from math import exp, log
-from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num
+from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -608,6 +608,48 @@ class SemFuncModel():
         # Return these as preds
         preds = [(self.pred_name[i], self.pred_name[j]) for i,j in sorted_tuples]
         return preds
+    
+    def dot_product_of_samples(self, pred1, pred2, samples=100, burnin=500, interval=100, chosen=False):
+        """
+        Get the dot products of samples between two predicates
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 100) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        """
+        pred1_samples = array(list(self.sample_from_pred(pred1, samples, burnin, interval, chosen)), dtype=float)
+        pred2_samples = array(list(self.sample_from_pred(pred2, samples, burnin, interval, chosen)), dtype=float)
+        return tensordot(pred1_samples, pred2_samples, (1,1)) / self.C
+    
+    def probability_of_match(self, pred1, pred2, threshold, samples=100, burnin=500, interval=100, chosen=False):
+        """
+        Find the probability that entities conditioned on two predicates are very similar
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param threshold: the similarity threshold (from 0 to 1)
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 100) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        """
+        dots = self.dot_product_of_samples(pred1, pred2, samples, burnin, interval, chosen)
+        above = (dots > threshold).sum()
+        return above / dots.size
+    
+    def mean_sd_dot(self, pred1, pred2, samples=100, burnin=500, interval=100, chosen=False):
+        """
+        Get the mean and standard deviation of the dot products of samples between two predicates
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 100) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        """
+        dots = self.dot_product_of_samples(pred1, pred2, samples, burnin, interval, chosen)
+        return dots.mean(), dots.std()
 
 
 class SemFuncModel_IndependentPreds(SemFuncModel):
@@ -756,7 +798,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :param high: (default 0.8) the maximum non-sparse probability of each component
         :return: the vector
         """
-        prob = self.pred_wei[pred].clip(low, high)  # Use ent bias?
+        prob = self.pred_wei[pred].clip(low, high)  # Use ent bias?  # Take expit?
         return self.sample_card_restr(prob)
     
     def closest_preds(self, preds, number=1):
