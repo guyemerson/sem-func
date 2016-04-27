@@ -61,8 +61,10 @@ def setup_trainer(**kw):
                                  "rate_ratio",
                                  "l2",
                                  "l2_ratio",
+                                 "l2_ent",
                                  "l1",
                                  "l1_ratio",
+                                 "l1_ent",
                                  "ent_steps",
                                  "pred_steps"])
     if kw['setup'] == 'direct':
@@ -113,8 +115,10 @@ if __name__ == "__main__":
     parser.add_argument('-rate_ratio', type=float, default=1)
     parser.add_argument('-l2', type=float, default=0.001)
     parser.add_argument('-l2_ratio', type=float, default=1)
+    parser.add_argument('-l2_ent', type=float, default=0.001)
     parser.add_argument('-l1', type=float, default=0.001)
     parser.add_argument('-l1_ratio', type=float, default=1)
+    parser.add_argument('-l1_ent', type=float, default=0.001)
     parser.add_argument('-ent_steps', type=int, default=10)
     parser.add_argument('-pred_steps', type=int, default=1)
     parser.add_argument('-ada_decay', type=float, default=1-10**-8)

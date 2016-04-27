@@ -10,7 +10,7 @@ class TrainingSetup():
     A semantic function model with a training regime.
     Expects preprocessed data during training.
     """
-    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l2, l2_ratio, ent_steps, pred_steps):
+    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l1_ent, l2, l2_ratio, l2_ent, ent_steps, pred_steps):
         """
         Initialise the training setup
         :param model: the semantic function model
@@ -18,8 +18,10 @@ class TrainingSetup():
         :param rate_ratio: ratio between pred and link training rates
         :param l1: overall L1 regularisation strength
         :param l1_ratio: ratio between pred and link L1 regularisation strengths
+        :param l1_ent: L1 regularisation strength for entity biases
         :param l2: overall L2 regularisation strength
         :param l2_ratio: ratio between pred and link L2 regularisation strengths
+        :param l2_ent: L2 regularisation strength for entity biases
         :param ent_steps: (default 1) number of Metropolis-Hastings steps to make when resampling latent entities
         :param pred_steps: (default 1) number of Metropolis-Hastings steps to make when resampling negative predicates
         """
@@ -39,6 +41,8 @@ class TrainingSetup():
         self.L2_pred = 2 * l2 * sqrt(l2_ratio)
         self.L1_link = l1 / sqrt(l1_ratio)
         self.L1_pred = l1 * sqrt(l1_ratio)
+        self.L1_ent = l1_ent
+        self.L2_ent = l2_ent
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
@@ -308,8 +312,14 @@ class AdaGradTrainingSetup(TrainingSetup):
         """
         for i, grad in enumerate(link_gradients):
             # Add regularisation
-            grad -= self.L1_link
-            grad -= self.link_weights[i] * self.L2_link
+            if i < len(self.model.link_local_weights): #!# Specific to current model...
+                L1 = self.L1_link
+                L2 = self.L2_link
+            else:
+                L1 = self.L1_ent
+                L2 = self.L2_ent
+            grad -= L1
+            grad -= L2
             # Calculate square
             sq = grad ** 2
             # Divide by root sum square
