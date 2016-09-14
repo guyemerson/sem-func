@@ -1,5 +1,5 @@
 from math import exp, log
-from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition
+from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition, flatnonzero
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -160,28 +160,11 @@ class SemFuncModel():
         :param ent: the current entity vector
         :return: a new entity vector, the component switched off, and the component switched on
         """
-        # Pick an on and an off unit to switch
-        old_jth = random.randint(self.C)
-        new_jth = random.randint(self.D-self.C)
-        # Find these units
-        on = 0
-        for i, val in enumerate(ent):
-            if val:
-                if on == old_jth:
-                    old_i = i
-                    break
-                else:
-                    on += 1
-        off = 0
-        for i, val in enumerate(ent):
-            if not val:
-                if off == new_jth:
-                    new_i = i
-                    break
-                else:
-                    off += 1
+        # Pick units to switch off and on
+        old_i = flatnonzero(ent)[random.randint(self.C)]
+        new_i = flatnonzero(ent - 1)[random.randint(self.D - self.C)]
         # Propose new entity
-        new_ent = array(ent)  # returns a copy
+        new_ent = ent.copy()
         new_ent[old_i] = 0
         new_ent[new_i] = 1
         
