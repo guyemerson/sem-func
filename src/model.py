@@ -1,5 +1,5 @@
 from math import exp, log
-from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot
+from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
@@ -145,10 +145,11 @@ class SemFuncModel():
         except Exception as e:  # If too many components have high probs (giving underflow errors), just take the highest
             if e.args[0] != 'div zero!':
                 raise e
-            print('div zero!')
-            print(prob)
-            print(intermed[-1].sum())
-            print(i, aux)
+            if self.verbose:
+                print('div zero!')
+                print(prob)
+                print(intermed[-1].sum())
+                print(i, aux)
             vec[:] = 0
             vec[prob.argpartition(-self.C)[-self.C:]] = 1
         return vec
@@ -218,6 +219,8 @@ class SemFuncModel():
         new_prob = self.prob(new_ent, pred)
         old_prob = self.prob(old_ent, pred)
         
+        #print(new_prob, old_prob, end=' ')
+        
         if old_prob == 0:
             print(pred)
             print(old_ent)
@@ -226,6 +229,7 @@ class SemFuncModel():
             raise Exception('prob 0!')
         
         ratio = new_prob / old_prob
+        # TODO Need to deal with one or both being nan...
         
         # Next, background energy of entities:
         negenergy = self.ent_bias[old_i] - self.ent_bias[new_i]
@@ -245,8 +249,11 @@ class SemFuncModel():
         
         # Change the vector accordingly
         if self.metro_switch(ratio):
+            #print('switch')
             old_ent[old_i] = 0
             old_ent[new_i] = 1
+        #else:
+        #    print('stay')
         
         return old_ent
     
@@ -443,69 +450,148 @@ class SemFuncModel():
         """
         raise NotImplementedError
     
-    def sample_from_pred(self, pred, samples=5, burnin=5, interval=2, chosen=True):
+    def sample_from_pred(self, pred, samples=100, burnin=500, interval=50, chosen=True, init='max'):
         """
         Sample entity vectors conditioned on a predicate
         :param pred: a predicate
-        :param samples: (default 5) number of samples to average over
-        :param burnin: (default 5) number of samples to skip before averaging starts
-        :param interval: (default 2) number of samples to take between those used in the average
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 50) number of samples to take between those used in the average
         :param chosen: (default True) whether to condition on the pred being chosen or being true
         :return: a generator of entity vectors
         """
-        v = self.init_vec_from_pred(pred)  #!# Not currently controlling high and low limits
-        for _ in range(max(0, burnin-interval)):
+        if init == 'old':
+            v = self.init_vec_from_pred(pred)  #!# Not currently controlling high and low limits
+        elif init == 'max':
+            v = self.max_vec_from_pred(pred)
+        else:
+            raise Exception
+        
+        for _ in range(burnin-interval):
             self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
         for _ in range(samples):
             for _ in range(interval):
                 self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
             yield v.copy()
     
-    def mean_sample_from_pred(self, pred, samples=5, burnin=5, interval=2, chosen=True):
+    def sample_from_graph(self, nodes, samples=100, burnin=500, interval=50, chosen=False, init='max', keep=None):
+        """
+        Sample entity vectors conditioned on a lexicalised graph
+        :param nodes: a list of nodes of the form (pred, out_labs, out_ids, in_labs, in_ids), indexed by position in the list
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 50) number of samples to take between those used in the average
+        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param keep: array or list of which nodes' vectors should be returned (default everything)
+        :return: a generator of entity vectors (as matrices)
+        """
+        # Initialise
+        N = len(nodes)
+        ents = zeros((N, self.D))
+        if init == 'old':
+            for i in range(N):
+                ents[i] = self.init_vec_from_pred(nodes[i][0])
+        elif init == 'max':
+            for i in range(N):
+                ents[i] = self.max_vec_from_pred(nodes[i][0])
+        
+        # Change indices to vectors
+        nodes = [list(n) for n in nodes]
+        for n in nodes:
+            n[2] = [ents[i] for i in n[2]]
+            n[4] = [ents[i] for i in n[4]]
+        
+        # Sample
+        for _ in range(burnin - interval):
+            for i, n in enumerate(nodes):
+                self.resample_conditional(ents[i], *n, chosen=chosen)
+        for _ in range(samples):
+            for _ in range(interval):
+                for i, n in enumerate(nodes):
+                    self.resample_conditional(ents[i], *n, chosen=chosen)
+            if keep:
+                yield ents[keep].copy()
+            else:
+                yield ents.copy()
+    
+    def sample_from_svo(self, subj, verb, obj, **kwargs):
+        """
+        Sample entity vectors from an SVO triple
+        :param subj: subject predicate index
+        :param verb: verb predicate index
+        :param obj: object predicate index
+        :return: a generator of entity vectors (as matrices)
+        """
+        nodes = []
+        nodes.append((subj, (), (), (0,), (1,)))
+        nodes.append((verb, (0,1), (0,2), (), ()))
+        nodes.append((obj, (), (), (1,), (1,)))
+        return self.sample_from_graph(nodes, **kwargs)
+    
+    def sample_from_sv(self, subj, verb, **kwargs):
+        """
+        Sample entity vectors from an SV pair
+        :param subj: subject predicate index
+        :param verb: verb predicate index
+        :return: a generator of entity vectors (as matrices)
+        """
+        nodes = []
+        nodes.append((subj, (), (), (0,), (1,)))
+        nodes.append((verb, (0,), (0,), (), ()))
+        return self.sample_from_graph(nodes, **kwargs)
+    
+    def sample_from_vo(self, verb, obj, **kwargs):
+        """
+        Sample entity vectors from a VO pair
+        :param verb: verb predicate index
+        :param obj: object predicate index
+        :return: a generator of entity vectors (as matrices)
+        """
+        nodes = []
+        nodes.append((verb, (1,), (1,), (), ()))
+        nodes.append((obj, (), (), (1,), (0,)))
+        return self.sample_from_graph(nodes, **kwargs)
+    
+    def mean_sample_from_pred(self, pred, **kwargs):
         """
         Sample entity vectors conditioned on a predicate, and average them
         :param pred: a predicate
-        :param samples: (default 5) number of samples to average over
-        :param burnin: (default 5) number of samples to skip before averaging starts
-        :param interval: (default 2) number of samples to take between those used in the average
-        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param **kwargs: sampling options
         :return: the mean entity vector
         """
-        return sum(self.sample_from_pred(pred, samples, burnin, interval, chosen)) / samples
+        samples = self.sample_from_pred(pred, **kwargs)
+        return sum(samples) / len(samples)
     
-    def cosine_of_samples(self, pred1, pred2, samples=5, burnin=5, interval=2, chosen=True):
+    def cosine_of_samples(self, pred1, pred2, **kwargs):
         """
         Calculate the average cosine distance (1 - normalised dot product)
         between sampled entity vectors conditioned on a pair of predicates
         :param pred1: a predicate
         :param pred2: a predicate
-        :param samples: (default 5) number of samples to average over
-        :param burnin: (default 5) number of samples to skip before averaging starts
-        :param interval: (default 2) number of samples to take between those used in the average
-        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param **kwargs: sampling options
         :return: the cosine distance
         """
         # As dot products are distributive over addition, and all samples have the same length,
         # we can take the dot product of the sums
-        mean1 = self.mean_sample_from_pred(pred1, samples, burnin, interval, chosen)
-        mean2 = self.mean_sample_from_pred(pred2, samples, burnin, interval, chosen)
+        mean1 = self.mean_sample_from_pred(pred1, **kwargs)
+        mean2 = self.mean_sample_from_pred(pred2, **kwargs)
         return cosine(mean1, mean2)
     
-    def implies(self, pred1, pred2, samples=5, burnin=5, interval=2):
+    def implies(self, pred1, pred2, **kwargs):
         """
         Calculate the probability that the truth of pred1 implies the truth of pred2
         :param pred1: a predicate
         :param pred2: a predicate
-        :param samples: (default 5) number of samples to average over
-        :param burnin: (default 5) number of samples to skip before averaging starts
-        :param interval: (default 2) number of samples to take between those used in the average
+        :param **kwargs: sampling options
         :return: the probability pred1 implies pred2
         """
         total = 0
-        ents = self.sample_from_pred(pred1, samples=samples, burnin=burnin, interval=interval, chosen=False)
+        ents = self.sample_from_pred(pred1, chosen=False, **kwargs)
+        n = 0
         for v in ents:
             total += self.prob(v, pred2)
-        return total/samples
+            n += 1
+        return total/n
     
     # Util functions
     
@@ -515,6 +601,14 @@ class SemFuncModel():
         :param pred: a predicate
         :param low: (default 0.01) the minimum non-sparse probability of each component
         :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
+        raise NotImplementedError
+    
+    def max_vec_from_pred(self, pred):
+        """
+        Return the most typical entity vector for a pred
+        :param pred: a predicate
         :return: the vector
         """
         raise NotImplementedError
@@ -609,46 +703,37 @@ class SemFuncModel():
         preds = [(self.pred_name[i], self.pred_name[j]) for i,j in sorted_tuples]
         return preds
     
-    def dot_product_of_samples(self, pred1, pred2, samples=100, burnin=500, interval=100, chosen=False):
+    def dot_product_of_samples(self, pred1, pred2, **kwargs):
         """
         Get the dot products of samples between two predicates
         :param pred1: a predicate index
         :param pred2: another predicate index
-        :param samples: (default 100) number of samples to average over
-        :param burnin: (default 500) number of samples to skip before averaging starts
-        :param interval: (default 100) number of samples to take between those used in the average
-        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param **kwargs: sampling options
         """
-        pred1_samples = array(list(self.sample_from_pred(pred1, samples, burnin, interval, chosen)), dtype=float)
-        pred2_samples = array(list(self.sample_from_pred(pred2, samples, burnin, interval, chosen)), dtype=float)
+        pred1_samples = array(list(self.sample_from_pred(pred1, **kwargs)), dtype=float)
+        pred2_samples = array(list(self.sample_from_pred(pred2, **kwargs)), dtype=float)
         return tensordot(pred1_samples, pred2_samples, (1,1)) / self.C
     
-    def probability_of_match(self, pred1, pred2, threshold, samples=100, burnin=500, interval=100, chosen=False):
+    def probability_of_match(self, pred1, pred2, threshold, **kwargs):
         """
         Find the probability that entities conditioned on two predicates are very similar
         :param pred1: a predicate index
         :param pred2: another predicate index
         :param threshold: the similarity threshold (from 0 to 1)
-        :param samples: (default 100) number of samples to average over
-        :param burnin: (default 500) number of samples to skip before averaging starts
-        :param interval: (default 100) number of samples to take between those used in the average
-        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param **kwargs: sampling options
         """
-        dots = self.dot_product_of_samples(pred1, pred2, samples, burnin, interval, chosen)
+        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
         above = (dots > threshold).sum()
         return above / dots.size
     
-    def mean_sd_dot(self, pred1, pred2, samples=100, burnin=500, interval=100, chosen=False):
+    def mean_sd_dot(self, pred1, pred2, **kwargs):
         """
         Get the mean and standard deviation of the dot products of samples between two predicates
         :param pred1: a predicate index
         :param pred2: another predicate index
-        :param samples: (default 100) number of samples to average over
-        :param burnin: (default 500) number of samples to skip before averaging starts
-        :param interval: (default 100) number of samples to take between those used in the average
-        :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param **kwargs: sampling options
         """
-        dots = self.dot_product_of_samples(pred1, pred2, samples, burnin, interval, chosen)
+        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
         return dots.mean(), dots.std()
 
 
@@ -656,7 +741,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
     """
     SemFuncModel with independent parameters for each predicate
     """
-    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0):
+    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0, verbose=True):
         """
         Initialise the model
         :param preds: names of predicates
@@ -667,8 +752,11 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :param init_bias: (optional) initial bias for calculating semantic function values
         :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
+        :param verbose: (default True) whether to print messages
         """
-        print("Initialising model")
+        self.verbose = verbose
+        if self.verbose:
+            print("Initialising model")
         
         # Names for human readability
         self.pred_name = preds
@@ -718,7 +806,8 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.calc_av_pred()  # average predicate
         self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
-        print("Converting to shared memory")
+        if self.verbose:
+            print("Converting to shared memory")
         # Convert to shared memory
         self.freq = make_shared(self.freq)
         self.link_wei = make_shared(self.link_wei)
@@ -800,6 +889,16 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         """
         prob = self.pred_wei[pred].clip(low, high)  # Use ent bias?  # Take expit?
         return self.sample_card_restr(prob)
+    
+    def max_vec_from_pred(self, pred):
+        """
+        Return the most typical entity vector for a pred
+        :param pred: a predicate
+        :return: the vector
+        """
+        vec = zeros(self.D)
+        vec[argpartition(self.pred_wei[pred], -self.C)[-self.C:]] = 1
+        return vec
     
     def closest_preds(self, preds, number=1):
         """

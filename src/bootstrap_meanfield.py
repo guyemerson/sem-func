@@ -5,31 +5,40 @@ from numpy import outer, zeros_like, zeros, array
 from math import log
 
 from pydmrs.components import RealPred
-from utils import make_shared
+from utils import make_shared, is_verb
 
-D = 300
-C = 30
+D = 800
+C = 40
+
+half = int(D/2)
 
 with open('/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl', 'rb') as f:
     preds = pickle.load(f)
+ind = {p:i for i,p in enumerate(preds)}
+pred_index = {RealPred.from_string(p):i for p,i in ind.items()}
 
 pred_wei = make_shared(zeros((len(preds), D)))
-with open('/anfs/bigdisc/gete2/wikiwoods/word2vec/matrix300', 'r') as f:
-    for i, line in enumerate(f):
-        pred, vecstr = line.strip().split(maxsplit=1)
-        assert pred == preds[i]
-        vec = array(vecstr.split())
-        pred_wei[i] = vec
+for filename, offset in [('/anfs/bigdisc/gete2/wikiwoods/word2vec/matrix_nouns400', 0),
+                         ('/anfs/bigdisc/gete2/wikiwoods/word2vec/matrix_verbs400', half)]:
+    with open(filename, 'r') as f:
+        for line in f:
+            pred, vecstr = line.strip().split(maxsplit=1)
+            vec = array(vecstr.split())
+            pred_wei[ind[pred], offset:offset+half] = vec
+# Make vectors longer (av. sum 1.138 over av. 44.9 nonzero entries)
+# An average entry is then 0.2, so a predicate is expit(0.2*30 - 3) = 0.95 true
 pred_wei *= 8
 
 DATA = '/anfs/bigdisc/gete2/wikiwoods/core-5'
-
-pred_index = {RealPred.from_string(p):i for i,p in enumerate(preds)}
 
 bias = log(D/C - 1)
 
 def mean_vec(pred):
     vec = expit(pred_wei[pred_index[pred]] - bias)
+    if pred.pos == 'v':
+        vec[:half] = 0
+    else:
+        vec[half:] = 0
     vec *= (30 / vec.sum())
     return vec
 
@@ -52,17 +61,18 @@ def summarise(fname):
         summarise_triple(t, matrix)
     return matrix
 
-all_files = os.listdir(DATA)
-with Pool(50) as p:
-    link_mat = zeros((2, D, D))
-    for mat in p.imap_unordered(summarise, all_files):
-        link_mat += mat
-
-with open('/anfs/bigdisc/gete2/wikiwoods/sem-func/bootstrap_link_0.pkl', 'wb') as f:
-    pickle.dump(link_mat, f)
-
-# Next step: given link weights,
-# iterate to find mean field for each situation
-# initialise as Above
-# add in link weights, recalculate mean field - repeat till convergence
-# also count total for each dimension
+if __name__ == "__main__":
+    all_files = os.listdir(DATA)
+    with Pool(20) as p:
+        link_mat = zeros((2, D, D))
+        for mat in p.imap_unordered(summarise, all_files):
+            link_mat += mat
+    
+    with open('/anfs/bigdisc/gete2/wikiwoods/sem-func/bootstrap_link_400.pkl', 'wb') as f:
+        pickle.dump(link_mat, f)
+    
+    # Next step: given link weights,
+    # iterate to find mean field for each situation
+    # initialise as Above
+    # add in link weights, recalculate mean field - repeat till convergence
+    # also count total for each dimension

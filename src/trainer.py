@@ -1,8 +1,9 @@
 import pickle, os, sys
-from numpy import arange, empty, inf, random, unravel_index, zeros
+from numpy import arange, empty, inf, random, unravel_index, zeros, partition
 from copy import copy
-from multiprocessing import Manager, Process, Queue
+from multiprocessing import Process, Queue
 from time import sleep
+from random import shuffle
 
 from utils import sub_namespace
 
@@ -75,7 +76,7 @@ class DataInterface():
         # Latent entities
         self.ents = empty((self.N, self.model.D))
         for i, n in enumerate(self.nodes):
-            self.ents[i] = self.model.init_vec_from_pred(n[1])
+            self.ents[i] = self.model.init_vec_from_pred(n[1])  #!# Not currently controlling high and low limits
         for _ in range(ent_burnin):
             self.setup.resample_conditional_batch(self.nodes, self.ents)
         # Negative pred samples
@@ -185,10 +186,11 @@ class Trainer():
     """
     Handle processes during training
     """
-    def __init__(self, interface, data_dir, output_name, processes, epochs, minibatch, ent_burnin, pred_burnin):
+    def __init__(self, interface, manager, data_dir, output_name, processes, epochs, minibatch, ent_burnin, pred_burnin):
         """
         Initialise the trainer
         :param interface: DataInterface object
+        :param manager: a multiprocessing.Manager object to manage a list of completed files
         :param data_dir: directory including data files
         :param output_name: name for output files (without file extension)
         :param processes: number of processes
@@ -216,8 +218,7 @@ class Trainer():
                                              "pred_burnin"])
         self.aux_info["neg_samples"] = self.interface.NEG
         self.aux_info["particle"] = self.interface.neg_nodes
-        self.completed_file_manager = Manager()
-        self.completed_files = self.completed_file_manager.list()
+        self.completed_files = manager.list()
         
     # Functions for multiprocessing
     
@@ -226,7 +227,7 @@ class Trainer():
         Train on a single file
         (without saving to disk)
         """
-        print(fname)
+        #print(fname)
         with open(os.path.join(self.data_dir, fname), 'rb') as f:
             self.interface.load_file(f,
                                      ent_burnin = self.ent_burnin,
@@ -257,7 +258,8 @@ class Trainer():
             worker.start()
         
         for i, q in enumerate(self.setup.pred_update_queues):
-            if i < len(self.setup.pred_local_weights):
+            #if i < len(self.setup.pred_local_weights):
+            if i == 0:
                 def update():
                     weight = self.setup.pred_weights[i]
                     sqsum = self.setup.pred_sqsum[i]
@@ -270,6 +272,25 @@ class Trainer():
                             weight[step.indices] += step.array.clip(-weight[step.indices])
                         else:
                             break
+            elif i == 1:
+                def update():
+                    weight = self.setup.pred_weights[i]
+                    sqsum = self.setup.pred_sqsum[i]
+                    pred_wei = self.setup.pred_weights[0]
+                    thresh = 5
+                    while True:
+                        item = q.get()
+                        if item is not None:
+                            sqgrad, step = item
+                            assert step.next == step.indices.shape[0]
+                            sqsum[step.indices] += sqgrad
+                            weight[step.indices] += step.array.clip(-weight[step.indices])
+                            high = partition(pred_wei[step.indices], -self.model.C, axis=1)[:, -self.model.C:].sum(axis=1)
+                            aver = pred_wei[step.indices].mean(axis=1) * self.model.C * 2
+                            clip_mask = (high - aver > 2 * thresh)
+                            weight[step.indices] = clip_mask * weight[step.indices].clip(aver+thresh, high-thresh) + (1 - clip_mask) * (high-aver)/2
+                        else:
+                            break
             else:
                 raise NotImplementedError
             worker = Process(target=update)
@@ -278,10 +299,13 @@ class Trainer():
         # Workers to process training data
         
         file_queue = Queue()
-        for fname in sorted(os.listdir(self.data_dir)):
+        file_names = os.listdir(self.data_dir)
+        shuffle(file_names)
+        for fname in file_names:
             file_queue.put(fname)
         for _ in range(self.processes):
             file_queue.put(None)
+        print('file queue populated', file_queue.qsize())
         
         def train():
             while True:
@@ -295,6 +319,7 @@ class Trainer():
         training_workers = []
         for _ in range(self.processes):
             worker = Process(target=train)
+            print('starting worker')
             worker.start()
             training_workers.append(worker)
         
@@ -327,8 +352,8 @@ class Trainer():
             crucial.model.freq = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
             crucial.model.pred_name = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
             # Remove queues (which can't be pickled)
-            crucial.link_update_queues = None
-            crucial.pred_update_queues = None
+            crucial.link_update_queues = [q.qsize() for q in crucial.link_update_queues]
+            crucial.pred_update_queues = [q.qsize() for q in crucial.pred_update_queues]
             # Save the file!
             pickle.dump(crucial, f)
         with open(self.output_name+'.aux.pkl', 'wb') as f:

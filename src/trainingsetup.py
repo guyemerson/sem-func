@@ -1,6 +1,5 @@
 import pickle, os
-from math import sqrt
-from numpy import zeros, zeros_like, array
+from numpy import zeros, zeros_like, array, sqrt
 from multiprocessing import Queue
 
 from utils import make_shared, sparse_like
@@ -47,8 +46,8 @@ class TrainingSetup():
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
         # Queues for weight updates
-        self.link_update_queues = [Queue() for x in self.link_weights]
-        self.pred_update_queues = [Queue() for x in self.pred_weights]
+        self.link_update_queues = [Queue() for _ in self.link_weights]
+        self.pred_update_queues = [Queue() for _ in self.pred_weights]
     
     # Batch resampling
     
@@ -224,9 +223,9 @@ class TrainingSetup():
             if with_tokens:
                 setup.model.get_pred_tokens(freq)
         if setup.link_update_queues is None:
-            setup.link_update_queues = [Queue() for x in setup.link_weights]
+            setup.link_update_queues = [Queue() for _ in setup.link_weights]
         if setup.pred_update_queues is None:
-            setup.pred_update_queues = [Queue() for x in setup.pred_weights]
+            setup.pred_update_queues = [Queue() for _ in setup.pred_weights]
         
         with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
             aux_info = pickle.load(f)
@@ -319,11 +318,11 @@ class AdaGradTrainingSetup(TrainingSetup):
                 L1 = self.L1_ent
                 L2 = self.L2_ent
             grad -= L1
-            grad -= L2
+            grad -= self.link_weights[i] * L2
             # Calculate square
             sq = grad ** 2
             # Divide by root sum square
-            grad /= (self.link_sqsum[i] + sq).clip(10**-12) ** 0.5  # Prevent zero-division errors
+            grad /= sqrt((self.link_sqsum[i] + sq).clip(10**-12))  # Prevent zero-division errors
             # Multiply by learning rate
             grad *= self.rate_link
             # Descend (or rather, add to queue)
@@ -337,7 +336,7 @@ class AdaGradTrainingSetup(TrainingSetup):
                 # Increase square sums (or rather, add to queue)
                 sq = grad.array ** 2
                 # Divide by root sum square
-                grad.array /= (self.pred_sqsum[i][grad.indices] + sq).clip(10**-12) ** 0.5  # Prevent zero-division errors
+                grad.array /= sqrt((self.pred_sqsum[i][grad.indices] + sq).clip(10**-12))  # Prevent zero-division errors
                 # Multiply by learning rate
                 grad.array *= self.rate_pred
             else:

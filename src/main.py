@@ -1,4 +1,5 @@
 import sys, os, pickle, numpy, argparse
+from multiprocessing import Manager
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 from trainingsetup import DirectTrainingSetup, AdaGradTrainingSetup
@@ -54,7 +55,7 @@ def setup_trainer(**kw):
         model_kwargs.update(sub_dict(kw, ["embed_dims"]))
     else:
         raise Exception('model class not recognised')
-    model = model_class(preds, links, pred_freq, **model_kwargs)
+    model = model_class(preds, links, pred_freq, verbose=False, **model_kwargs)
     
     # Set up training hyperparameters
     setup_kwargs = sub_dict(kw, ["rate",
@@ -87,7 +88,11 @@ def setup_trainer(**kw):
                                    "minibatch",
                                    "ent_burnin",
                                    "pred_burnin"])
+    
+    # Set up manager for shared writable objects
+    manager = Manager()
     trainer = Trainer(interface,
+                      manager,
                       data_dir = DATA,
                       output_name = OUTPUT,
                       **trainer_kwargs)
@@ -142,7 +147,3 @@ if __name__ == "__main__":
     
     trainer.start()
     
-    """
-    import cProfile
-    cProfile.runctx(..., globals(), locals())
-    """
