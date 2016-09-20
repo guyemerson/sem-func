@@ -81,30 +81,17 @@ class SemFuncModel():
         :param prob: non-sparse probabilities of each component
         :return: cardinality probabilities for successive subsets of components
         """
-        first_message = zeros(self.C+1)
-        first_message[0] = 1-prob[0]
-        first_message[1] = prob[0]
-        intermed = [first_message]
+        intermed = zeros((self.D-1, self.C+1))
+        intermed[0,0] = 1-prob[0]
+        intermed[0,1] = prob[0]
         # Note! This loop is a bottleneck, because it's done in Python rather than NumPy.
         # (We call this function often enough that it matters)
         # It would be faster for this loop to be done in C...
-        for p in prob[1:-1]:  # [1, 2, ..., D-2]
-            message = self.convolve(intermed[-1], p)
-            intermed.append(message)
+        for i in range(1,self.D-1):
+            intermed[i] = intermed[i-1] * (1 - prob[i-1])
+            intermed[i,1:] += intermed[i-1,:-1] * prob[i-1]
+
         return intermed
-    
-    @staticmethod
-    def convolve(prev, p):
-        """
-        Convolve prev with (p,1-p), truncated to length self.C+1
-        (Faster than numpy.convolve for this case)
-        :param prev: probabilities [P(0),...,P(C)]
-        :param p: probability of the next component
-        :return: the next probabilities
-        """
-        result = prev * (1-p)
-        result[1:] += prev[:-1] * p
-        return result
     
     def pass_messages_down(self, prob, intermed):
         """
