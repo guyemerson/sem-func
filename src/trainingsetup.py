@@ -72,8 +72,8 @@ class TrainingSetup():
         """
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             vec = ents[nodeid]
-            out_vecs = [ents[i] for i in out_ids]
-            in_vecs = [ents[i] for i in in_ids]
+            out_vecs = ents[out_ids if type(out_ids)==list else list(out_ids)]  # TODO make sure the training data doesn't use tuples
+            in_vecs = ents[in_ids if type(in_ids)==list else list(in_ids)]
             self.model.resample_conditional(vec, pred, out_labs, out_vecs, in_labs, in_vecs)
     
     def resample_pred_batch(self, batch, ents, neg_preds):

@@ -5,15 +5,16 @@ from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 from trainingsetup import DirectTrainingSetup, AdaGradTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
 from utils import sub_namespace, sub_dict
+from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR
 
 def setup_trainer(**kw):
     """
     Setup a semantic function model, reading for training
     """    
     # Set input and output
-    DATA = '/anfs/bigdisc/gete2/wikiwoods/core-{}-nodes'.format(kw['thresh'])
+    DATA = os.path.join(DATA_DIR, 'core-{}-nodes'.format(kw['thresh']))
     
-    output_template = '/anfs/bigdisc/gete2/wikiwoods/sem-func/core-{}-{}'
+    output_template = os.path.join(OUT_DIR, 'core-{}-{}')
     
     if kw['suffix'] is None:
         kw['suffix'] = 1
@@ -23,8 +24,8 @@ def setup_trainer(**kw):
     OUTPUT = output_template.format(kw['thresh'], kw['suffix'])
     # Save under OUTPUT.pkl and OUTPUT.aux.pkl
     
-    VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
-    FREQ = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
+    VOCAB = os.path.join(AUX_DIR, 'core-5-vocab.pkl')
+    FREQ = os.path.join(AUX_DIR, 'core-5-freq.pkl')
     
     # Check the output path is clear
     if os.path.exists(OUTPUT+'.pkl'):
