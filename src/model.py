@@ -3,6 +3,7 @@ from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, b
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
+from warnings import warn
 
 from utils import make_shared, is_verb
 
@@ -63,10 +64,15 @@ class SemFuncModel():
         :param prob: the probability of each component being on
         """
         # If components are definitely on or off, the cardinality constraint may break:
-        for p in prob:
-            if p == 1:
-                print(prob)
-                raise Exception("prob 1!")
+        maxed_out = (prob == 1)
+        n_max = maxed_out.sum()
+        if n_max > self.C:
+            warn("{} units with prob 1!".format(n_max))
+            # In this case, just pick units at random from these
+            inds = random.choice(flatnonzero(maxed_out), size=self.C, replace=False)
+            vec = zeros(self.D)
+            vec[inds] = 1
+            return vec
         
         # Sparsity constraints can be enforced using belief propagation (sum-product algorithm)
         # We introduce intermediate nodes which count how many components have been turned on so far
