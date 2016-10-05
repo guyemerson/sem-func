@@ -300,6 +300,7 @@ class Trainer():
         
         file_queue = Queue()
         file_names = os.listdir(self.data_dir)
+        file_names = list(set(file_names) - set(self.completed_files))
         shuffle(file_names)
         for fname in file_names:
             file_queue.put(fname)
@@ -323,10 +324,13 @@ class Trainer():
             worker.start()
             training_workers.append(worker)
         
+        # Save regularly during training
         while (not file_queue.empty()) or any(w.is_alive() for w in training_workers):
             self.save()
             sys.stdout.flush()
             sleep(60)
+        
+        # Once all file queues are empty, or all workers have died:
         for q in self.setup.link_update_queues:
             q.put(None)
         for q in self.setup.pred_update_queues:

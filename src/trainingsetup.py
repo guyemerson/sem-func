@@ -26,13 +26,7 @@ class TrainingSetup():
         """
         # Semantic function model
         self.model = model
-        self.link_weights = model.link_weights  # list of link weight tensors
-        self.link_local_weights = model.link_local_weights
-        self.link_global_weights = model.link_global_weights
-        self.pred_weights = model.pred_weights  # list of pred weight tensors
-        self.pred_local_weights = model.pred_local_weights
-        self.pred_global_weights = model.pred_global_weights
-        self.all_weights = self.link_weights + self.pred_weights  # all weights
+        self.inherit()
         # Hyperparameters
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
@@ -48,6 +42,18 @@ class TrainingSetup():
         # Queues for weight updates
         self.link_update_queues = [Queue() for _ in self.link_weights]
         self.pred_update_queues = [Queue() for _ in self.pred_weights]
+    
+    def inherit(self):
+        """
+        Assign attributes of self.model to self
+        """
+        self.link_weights = self.model.link_weights  # list of link weight tensors
+        self.link_local_weights = self.model.link_local_weights
+        self.link_global_weights = self.model.link_global_weights
+        self.pred_weights = self.model.pred_weights  # list of pred weight tensors
+        self.pred_local_weights = self.model.pred_local_weights
+        self.pred_global_weights = self.model.pred_global_weights
+        self.all_weights = self.link_weights + self.pred_weights  # all weights
     
     # Batch resampling
     
@@ -72,8 +78,8 @@ class TrainingSetup():
         """
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             vec = ents[nodeid]
-            out_vecs = ents[out_ids if type(out_ids)==list else list(out_ids)]  # TODO make sure the training data doesn't use tuples
-            in_vecs = ents[in_ids if type(in_ids)==list else list(in_ids)]
+            out_vecs = ents[out_ids]
+            in_vecs = ents[in_ids]
             self.model.resample_conditional(vec, pred, out_labs, out_vecs, in_labs, in_vecs)
     
     def resample_pred_batch(self, batch, ents, neg_preds):
@@ -213,6 +219,8 @@ class TrainingSetup():
         """
         with open(os.path.join(directory, fname)+'.pkl', 'rb') as f:
             setup = pickle.load(f)
+        
+        # Load untrained data about preds
         if isinstance(setup.model.pred_name, str):
             with open(setup.model.pred_name, 'rb') as f:
                 setup.model.pred_name = pickle.load(f)
@@ -222,11 +230,18 @@ class TrainingSetup():
             setup.model.freq = array(freq) / sum(freq)
             if with_tokens:
                 setup.model.get_pred_tokens(freq)
-        if setup.link_update_queues is None:
+        
+        # Set up queues
+        if type(setup.link_update_queues[0]) == int:
             setup.link_update_queues = [Queue() for _ in setup.link_weights]
-        if setup.pred_update_queues is None:
+        if type(setup.pred_update_queues[0]) == int:
             setup.pred_update_queues = [Queue() for _ in setup.pred_weights]
         
+        # Make weights shared
+        setup.model.make_shared()
+        setup.inherit()
+        
+        # Load aux info
         with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
             aux_info = pickle.load(f)
         

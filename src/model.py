@@ -784,7 +784,12 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         
         if self.verbose:
             print("Converting to shared memory")
-        # Convert to shared memory
+        self.make_shared()
+    
+    def make_shared(self):
+        """
+        Convert to shared memory
+        """
         self.freq = make_shared(self.freq)
         self.link_wei = make_shared(self.link_wei)
         self.ent_bias = make_shared(self.ent_bias)
