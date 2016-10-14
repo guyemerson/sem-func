@@ -55,6 +55,13 @@ class TrainingSetup():
         self.pred_global_weights = self.model.pred_global_weights
         self.all_weights = self.link_weights + self.pred_weights  # all weights
     
+    def make_shared(self):
+        """
+        Make sure that tensors can be shared across processes
+        """
+        self.model.make_shared()
+        self.inherit()
+    
     # Batch resampling
     
     def resample_background_batch(self, batch, ents):
@@ -238,8 +245,7 @@ class TrainingSetup():
             setup.pred_update_queues = [Queue() for _ in setup.pred_weights]
         
         # Make weights shared
-        setup.model.make_shared()
-        setup.inherit()
+        setup.make_shared()
         
         # Load aux info
         with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
@@ -319,6 +325,14 @@ class AdaGradTrainingSetup(TrainingSetup):
         self.ada_decay = ada_decay
         self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
         self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]
+    
+    def make_shared(self):
+        """
+        Make sure that tensors can be shared across processes
+        """
+        super().make_shared()
+        self.link_sqsum = [make_shared(m) for m in self.link_sqsum]
+        self.pred_sqsum = [make_shared(m) for m in self.pred_sqsum]
         
     def descend(self, link_gradients, pred_gradients, n_pred):
         """
