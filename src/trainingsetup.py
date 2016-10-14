@@ -114,12 +114,12 @@ class TrainingSetup():
         :return: gradient matrices
         """
         gradient_matrices = [zeros_like(m) for m in self.link_weights]
-        for nodeid, out_labs, out_ids, _, _ in batch:
+        for nodeid, out_labs, out_ids, in_labs, _ in batch:
             # For each node, add gradients from outgoing links
             # (Incoming links are not included - this assumes we have all the relevant nodes)
             vec = ents[nodeid]
             out_vecs = [ents[i] for i in out_ids]
-            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices)
+            self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices, len(in_labs))
         return gradient_matrices
     
     def observe_latent_batch(self, batch, ents, neg_preds):
