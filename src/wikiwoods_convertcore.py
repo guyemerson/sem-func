@@ -3,7 +3,7 @@ from multiprocessing import Pool  # @UnresolvedImport
 
 from pydmrs.core import RealPred
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core-10000'
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-5'
 VOCAB = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
 OUTPUT = DATA + '-nodes'
 
@@ -31,15 +31,15 @@ def convert_triple(triple, nid):
     output = []
     verb_labs = []
     verb_ids = []
-    output.append((nid, verb_i, verb_labs, verb_ids, (), ()))
+    output.append((nid, verb_i, verb_labs, verb_ids, [], []))
     new_id = nid+1
     if agent:
-        output.append((new_id, agent_i, (), (), [0], [nid]))
+        output.append((new_id, agent_i, [], [], [0], [nid]))
         verb_labs.append(0)
         verb_ids.append(new_id)
         new_id += 1
     if patient:
-        output.append((new_id, patient_i, (), (), [1], [nid]))
+        output.append((new_id, patient_i, [], [], [1], [nid]))
         verb_labs.append(1)
         verb_ids.append(new_id)
         new_id += 1

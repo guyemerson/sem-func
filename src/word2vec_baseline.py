@@ -1,8 +1,8 @@
 import os, pickle, gensim
 from collections import Counter
 
-DATA = '/anfs/bigdisc/gete2/wikiwoods/core-5'
-OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/word2vec/model'
+DATA = '/anfs/bigdisc/gete2/wikiwoods/core-10000'
+OUTPUT = '/anfs/bigdisc/gete2/wikiwoods/word2vec/model-10000'
 
 class WikiWoodsIterator():
     "Iterate through all triples in a directory"
