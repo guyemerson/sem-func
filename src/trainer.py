@@ -1,11 +1,13 @@
 import pickle, os, sys
-from numpy import arange, empty, inf, random, unravel_index, zeros, partition
+from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Manager
 from time import sleep
 from random import shuffle
 
-from utils import sub_namespace
+from trainingsetup import TrainingSetup
+from utils import sub_namespace, sub_dict
+from _warnings import warn
 
 def create_particle(p_full, p_agent, p_patient):
     """
@@ -342,3 +344,35 @@ class Trainer():
             actual_info = copy(self.aux_info)
             actual_info['completed_files'] = self.completed_files._getvalue()
             pickle.dump(actual_info, f)
+    
+    @staticmethod
+    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/ore-5-nodes', output_name=None, output_dir=None):
+        """
+        Load trained model from disk
+        """
+        if output_dir == None:
+            output_dir = directory
+        if output_name == None:
+            output_name = fname
+            while not os.path.exists(os.path.join(output_dir, output_name)):
+                output_name += '_ctd'
+        
+        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True)
+        
+        interface = DataInterface(setup, (),
+                                  **sub_dict(aux_info, ['particle',
+                                                        'neg_samples']))
+        
+        trainer = Trainer(interface,
+                          Manager(),
+                          data_dir = data_dir,
+                          output_name = os.path.join(output_dir, output_name),
+                          **sub_dict(aux_info, ['processes',
+                                                'epochs',
+                                                'minibatch',
+                                                'ent_burnin',
+                                                'pred_burnin']))
+        
+        trainer.completed_files.extend(aux_info['completed_files'])
+        
+        return trainer
