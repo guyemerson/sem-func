@@ -62,7 +62,7 @@ class DataInterface():
         self.K = len(self.neg_nodes)
         self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
     
-    def load_data(self, data, ent_burnin, pred_burnin):
+    def load_data(self, data, ent_burnin, pred_burnin, check=False):
         """
         Load data from a list
         :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
@@ -71,8 +71,10 @@ class DataInterface():
         """
         # Dicts for graphs, nodes, and pred frequencies
         self.nodes = data
-        for i, n in enumerate(self.nodes): assert i == n[0]
         self.N = len(self.nodes)
+        # Optionally, check that nodeids are increasing integers
+        if check:
+            for i, n in enumerate(self.nodes): assert i == n[0]
         # Latent entities
         self.ents = empty((self.N, self.model.D))
         for i, n in enumerate(self.nodes):
@@ -80,9 +82,7 @@ class DataInterface():
         for _ in range(ent_burnin):
             self.setup.resample_conditional_batch(self.nodes, self.ents)
         # Negative pred samples
-        self.neg_preds = empty((self.N, self.NEG), dtype=int)
-        for n in self.nodes:
-            self.neg_preds[n[0], :] = n[1]  # Initialise all pred samples as the nodes' preds
+        self.neg_preds = random.choice(self.model.pred_tokens, (self.N, self.NEG))
         for _ in range(pred_burnin):
             self.setup.resample_pred_batch(self.nodes, self.ents, self.neg_preds)
     
@@ -258,41 +258,19 @@ class Trainer():
             worker.start()
         
         for i, q in enumerate(self.setup.pred_update_queues):
-            #if i < len(self.setup.pred_local_weights):
-            if i == 0:
-                def update():
-                    weight = self.setup.pred_weights[i]
-                    sqsum = self.setup.pred_sqsum[i]
-                    while True:
-                        item = q.get()
-                        if item is not None:
-                            sqgrad, step = item
-                            assert step.next == step.indices.shape[0]
-                            sqsum[step.indices] += sqgrad
-                            weight[step.indices] += step.array.clip(-weight[step.indices])
-                        else:
-                            break
-            elif i == 1:
-                def update():
-                    weight = self.setup.pred_weights[i]
-                    sqsum = self.setup.pred_sqsum[i]
-                    pred_wei = self.setup.pred_weights[0]
-                    thresh = 5
-                    while True:
-                        item = q.get()
-                        if item is not None:
-                            sqgrad, step = item
-                            assert step.next == step.indices.shape[0]
-                            sqsum[step.indices] += sqgrad
-                            weight[step.indices] += step.array.clip(-weight[step.indices])
-                            high = partition(pred_wei[step.indices], -self.model.C, axis=1)[:, -self.model.C:].sum(axis=1)
-                            aver = pred_wei[step.indices].mean(axis=1) * self.model.C * 2
-                            clip_mask = (high - aver > 2 * thresh)
-                            weight[step.indices] = clip_mask * weight[step.indices].clip(aver+thresh, high-thresh) + (1 - clip_mask) * (high-aver)/2
-                        else:
-                            break
-            else:
-                raise NotImplementedError
+            def update():
+                weight = self.setup.pred_weights[i]
+                sqsum = self.setup.pred_sqsum[i]
+                while True:
+                    item = q.get()
+                    if item is not None:
+                        sqgrad, step = item
+                        assert step.next == step.indices.shape[0]
+                        sqsum[step.indices] += sqgrad
+                        weight[step.indices] += step.array.clip(-weight[step.indices])
+                    else:
+                        break
+            
             worker = Process(target=update)
             worker.start()
         
