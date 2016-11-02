@@ -5,3 +5,4 @@ data/*
 *.out
 *.log
 *~
+src/archive/
