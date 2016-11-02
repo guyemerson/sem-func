@@ -48,7 +48,12 @@ def setup_trainer(**kw):
                                  "card",
                                  "init_bias",
                                  "init_card",
-                                 "init_range"])
+                                 "init_range",
+                                 "init_ent_bias",
+                                 "init_link_str",
+                                 "init_verb_prop",
+                                 "init_pat_prop",
+                                 "init_ag_prop"])
     if kw['model'] == 'independent':
         model_class = SemFuncModel_IndependentPreds
     elif kw['model'] == 'factorised':

@@ -22,17 +22,23 @@ def is_verb(string):
     """
     return string.split('_')[-2] == 'v'
 
-def sub_namespace(namespace, attrs):
+def sub_namespace(namespace, attrs, strict=False):
     """
     Get part of a namespace, as a dict
     """
-    return {x:getattr(namespace, x) for x in attrs}
+    if strict:
+        return {x:getattr(namespace, x) for x in attrs}
+    else:
+        return {x:getattr(namespace, x) for x in attrs if hasattr(namespace, x)}
 
-def sub_dict(dictionary, keys):
+def sub_dict(dictionary, keys, strict=False):
     """
     Get part of a dict
     """
-    return {x:dictionary[x] for x in keys}
+    if strict:
+        return {x:dictionary[x] for x in keys}
+    else:
+        return {x:dictionary[x] for x in keys if x in dictionary}
 
 class SparseRows():
     """

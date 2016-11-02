@@ -683,7 +683,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
     """
     SemFuncModel with independent parameters for each predicate
     """
-    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0, verbose=True):
+    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0, init_ent_bias=None, init_link_str=0, init_verb_prop=0.5, init_pat_prop=0.6, init_ag_prop=0.6, verbose=True):
         """
         Initialise the model
         :param preds: names of predicates
@@ -716,17 +716,20 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.L = len(links)
         self.C = card
         
-        # Trained weights
+        ### Trained weights ###
+        
         # Initialise link weights
         self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
-        #!# Init settings for links are not yet controllable with parameters
-        mid = int(dims/2) #!# N/V proportion
-        agent_high = int(dims * 0.8) #!# agent proportion
-        patient_low = int(dims * 0.7) #!# patient proportion
-        self.link_wei[0, :mid, mid:agent_high] = 0.3 #!# initial strength
-        self.link_wei[1, :mid, patient_low:] = 0.3
+        mid = int(dims * init_verb_prop)  # N/V proportion
+        agent_high = mid + int((dims-mid) * init_ag_prop)  # agent proportion
+        patient_low = mid + int((dims-mid) * (1-init_pat_prop))  # patient proportion
+        self.link_wei[0, :mid, mid:agent_high] = init_link_str  # initial strength
+        self.link_wei[1, :mid, patient_low:] = init_link_str
         self.ent_bias = zeros(self.D)
-        self.ent_bias += log(self.D/self.C - 1) #!# initial bias (currently so that expit(bias) = C/D)
+        if init_ent_bias is None:
+            init_ent_bias = log(self.D/self.C - 1)  # so that expit(bias) = C/D
+        self.ent_bias += init_ent_bias
+        
         # Initialise pred weights
         if init_card is None: init_card = dims/2
         self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
@@ -748,6 +751,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.calc_av_pred()  # average predicate
         self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
+        # For multiprocessing:
         if self.verbose:
             print("Converting to shared memory")
         self.make_shared()
