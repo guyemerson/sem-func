@@ -1,7 +1,7 @@
 import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
-from multiprocessing import Process, Queue, Manager
+from multiprocessing import Pool, Process, Manager
 from time import sleep
 from random import shuffle
 
@@ -80,6 +80,7 @@ class DataInterface():
         # Latent entities
         self.ents = empty((self.N, self.model.D))
         for i, n in enumerate(self.nodes):
+            # TODO use max vec?
             self.ents[i] = self.model.init_vec_from_pred(n[1])  #!# Not currently controlling high and low limits
         for _ in range(ent_burnin):
             self.setup.resample_conditional_batch(self.nodes, self.ents)
@@ -229,7 +230,7 @@ class Trainer():
         Train on a single file
         (without saving to disk)
         """
-        #print(fname)
+        print(fname)
         with open(os.path.join(self.data_dir, fname), 'rb') as f:
             self.interface.load_file(f,
                                      ent_burnin = self.ent_burnin,
@@ -244,6 +245,7 @@ class Trainer():
         """
         # Workers to update the shared weights from queued gradients
         
+        # Link weights (using a normal array)
         for i, q in enumerate(self.setup.link_update_queues):
             def update():
                 weight = self.setup.link_weights[i]
@@ -259,6 +261,7 @@ class Trainer():
             worker = Process(target=update)
             worker.start()
         
+        # Pred weights (using a SparseRows object)
         for i, q in enumerate(self.setup.pred_update_queues):
             def update():
                 weight = self.setup.pred_weights[i]
@@ -276,53 +279,61 @@ class Trainer():
             worker = Process(target=update)
             worker.start()
         
+        # TODO move the above functions to the setup class
+        
         # Workers to process training data
         
-        file_queue = Queue()
+        # Files to be trained on
         file_names = os.listdir(self.data_dir)
         file_names = list(set(file_names) - set(self.completed_files))
         shuffle(file_names)
-        for fname in file_names:
-            file_queue.put(fname)
-        for _ in range(self.processes):
-            file_queue.put(None)
-        print('file queue populated', file_queue.qsize())
+        print('{} files to process'.format(len(file_names)))
         
-        def train():
-            while True:
-                fname = file_queue.get()
-                if fname is not None:
-                    self.train_on_file(fname)
+        # Callbacks for Pool.map_async
+        self.training = True
+        self.error = None
+        def callback(_):
+            self.training = False  # Note the fact that training is complete
+        def error_callback(e):
+            self.error = e  # Store the error to be raised outside the callback
+        
+        with Pool(self.processes) as p:
+            p.map_async(self.train_on_file, file_names, 1, callback, error_callback)
+            while self.training:
+                if self.error:
+                    # Re-raise errors from worker processes
+                    print('Error during training!')
+                    self.kill_queues()  # Kill all update workers, so that the process can exit
+                    raise self.error
                 else:
-                    break
-            #print('worker done')
+                    # Save regularly during training
+                    self.save_and_sleep()
         
-        training_workers = []
-        for _ in range(self.processes):
-            worker = Process(target=train)
-            print('starting worker')
-            worker.start()
-            training_workers.append(worker)
-        
-        # Save regularly during training
-        while (not file_queue.empty()) or any(w.is_alive() for w in training_workers):
-            self.save()
-            sys.stdout.flush()
-            sleep(60)
-        
-        # Once all file queues are empty, or all workers have died:
+        # Once workers are done:
+        self.kill_queues()
+        while not (all(q.empty() for q in self.setup.link_update_queues) and \
+                   all(q.empty() for q in self.setup.pred_update_queues)):
+            print('Waiting for updates to finish...')
+            self.save_and_sleep()
+        print('Training complete')
+        self.save()
+    
+    def kill_queues(self):
+        """
+        Put None on each queue, to signal that that worker should stop
+        """
         for q in self.setup.link_update_queues:
             q.put(None)
         for q in self.setup.pred_update_queues:
             q.put(None)
-        while not (all(q.empty() for q in self.setup.link_update_queues) and \
-                   all(q.empty() for q in self.setup.pred_update_queues)):
-            print('Waiting for updates to finish...')
-            self.save()
-            sys.stdout.flush()
-            sleep(60)
-        print('Training complete')
+    
+    def save_and_sleep(self, time=60):
+        """
+        Save, flush stdout, and sleep
+        """
         self.save()
+        sys.stdout.flush()
+        sleep(60)
     
     def save(self):
         """
@@ -346,7 +357,7 @@ class Trainer():
             pickle.dump(actual_info, f)
     
     @staticmethod
-    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/ore-5-nodes', output_name=None, output_dir=None):
+    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/ore-5-nodes', output_name=None, output_dir=None, manager=None):
         """
         Load trained model from disk
         """
@@ -357,14 +368,17 @@ class Trainer():
             while not os.path.exists(os.path.join(output_dir, output_name)):
                 output_name += '_ctd'
         
-        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True)
+        if manager is None:
+            manager = Manager()
+        
+        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True, manager=manager)
         
         interface = DataInterface(setup, (),
                                   **sub_dict(aux_info, ['particle',
                                                         'neg_samples']))
         
         trainer = Trainer(interface,
-                          Manager(),
+                          manager,
                           data_dir = data_dir,
                           output_name = os.path.join(output_dir, output_name),
                           **sub_dict(aux_info, ['processes',

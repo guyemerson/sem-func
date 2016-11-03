@@ -63,6 +63,9 @@ def setup_trainer(**kw):
         raise Exception('model class not recognised')
     model = model_class(preds, links, pred_freq, verbose=False, **model_kwargs)
     
+    # Set up manager for shared writable objects
+    manager = Manager()
+    
     # Set up training hyperparameters
     setup_kwargs = sub_dict(kw, ["rate",
                                  "rate_ratio",
@@ -81,7 +84,7 @@ def setup_trainer(**kw):
         setup_kwargs.update(sub_dict(kw, ["ada_decay"]))
     else:
         raise Exception('setup class not recognised')
-    setup = setup_class(model, **setup_kwargs)
+    setup = setup_class(model, manager=manager, **setup_kwargs)
     
     # Set up training (without data)
     particle = create_particle(3,2,5)
@@ -95,8 +98,6 @@ def setup_trainer(**kw):
                                    "ent_burnin",
                                    "pred_burnin"])
     
-    # Set up manager for shared writable objects
-    manager = Manager()
     trainer = Trainer(interface,
                       manager,
                       data_dir = DATA,

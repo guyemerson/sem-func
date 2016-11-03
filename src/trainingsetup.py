@@ -1,6 +1,6 @@
 import pickle, os
 from numpy import zeros, zeros_like, array, sqrt
-from multiprocessing import Queue
+from multiprocessing import Manager
 
 from utils import make_shared, sparse_like
 
@@ -9,7 +9,7 @@ class TrainingSetup():
     A semantic function model with a training regime.
     Expects preprocessed data during training.
     """
-    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l1_ent, l2, l2_ratio, l2_ent, ent_steps, pred_steps):
+    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l1_ent, l2, l2_ratio, l2_ent, ent_steps, pred_steps, manager):
         """
         Initialise the training setup
         :param model: the semantic function model
@@ -23,6 +23,7 @@ class TrainingSetup():
         :param l2_ent: L2 regularisation strength for entity biases
         :param ent_steps: (default 1) number of Metropolis-Hastings steps to make when resampling latent entities
         :param pred_steps: (default 1) number of Metropolis-Hastings steps to make when resampling negative predicates
+        :param manager: a multiprocessing.Manager object to manage update Queues
         """
         # Semantic function model
         self.model = model
@@ -40,8 +41,8 @@ class TrainingSetup():
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
         # Queues for weight updates
-        self.link_update_queues = [Queue() for _ in self.link_weights]
-        self.pred_update_queues = [Queue() for _ in self.pred_weights]
+        self.link_update_queues = [manager.Queue() for _ in self.link_weights]
+        self.pred_update_queues = [manager.Queue() for _ in self.pred_weights]
     
     def inherit(self):
         """
@@ -220,7 +221,7 @@ class TrainingSetup():
         return self.model.background_energy(links, ents)
     
     @staticmethod
-    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', with_tokens=False):
+    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', with_tokens=False, manager=None):
         """
         Load a TrainingSetup instance from a file
         """
@@ -239,10 +240,12 @@ class TrainingSetup():
                 setup.model.get_pred_tokens(freq)
         
         # Set up queues
+        if manager is None:
+            manager = Manager()
         if type(setup.link_update_queues[0]) == int:
-            setup.link_update_queues = [Queue() for _ in setup.link_weights]
+            setup.link_update_queues = [manager.Queue() for _ in setup.link_weights]
         if type(setup.pred_update_queues[0]) == int:
-            setup.pred_update_queues = [Queue() for _ in setup.pred_weights]
+            setup.pred_update_queues = [manager.Queue() for _ in setup.pred_weights]
         
         # Make weights shared
         setup.make_shared()
