@@ -223,6 +223,9 @@ class Trainer():
         self.aux_info["particle"] = self.interface.neg_nodes
         self.completed_files = manager.list()
         
+        self.training = False
+        self.error = None
+        
     # Functions for multiprocessing
     
     def train_on_file(self, fname):
@@ -281,7 +284,6 @@ class Trainer():
         
         # TODO move the above functions to the setup class
         
-        # Workers to process training data
         
         # Files to be trained on
         file_names = os.listdir(self.data_dir)
@@ -289,16 +291,11 @@ class Trainer():
         shuffle(file_names)
         print('{} files to process'.format(len(file_names)))
         
-        # Callbacks for Pool.map_async
-        self.training = True
-        self.error = None
-        def callback(_):
-            self.training = False  # Note the fact that training is complete
-        def error_callback(e):
-            self.error = e  # Store the error to be raised outside the callback
-        
-        with Pool(self.processes) as p:
-            p.map_async(self.train_on_file, file_names, 1, callback, error_callback)
+        # Process the files with a pool of worker processes
+        with Pool(self.processes, self.init) as p:
+            self.training = True
+            self.error = None
+            p.map_async(self.work, file_names, 1, self.callback, self.error_callback)
             while self.training:
                 if self.error:
                     # Re-raise errors from worker processes
@@ -317,6 +314,24 @@ class Trainer():
             self.save_and_sleep()
         print('Training complete')
         self.save()
+    
+    # The following four functions are passed to Pool.map_async, during training
+    
+    # Callbacks for Pool.map_async
+    def callback(self, _):
+        self.training = False
+    def error_callback(self, e):
+        self.error = e
+    
+    # Initialise each worker with the train_on_file method,
+    # so that it is not pickled and piped with each file
+    def init(self):
+        global train_on_file
+        train_on_file = self.train_on_file
+    # The train_on_file function will be available in each worker
+    @staticmethod
+    def work(fname):
+        train_on_file(fname)
     
     def kill_queues(self):
         """
