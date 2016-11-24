@@ -2,8 +2,9 @@ import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
 from multiprocessing import Pool, Process, Manager, TimeoutError
-from time import sleep
+from time import sleep, time
 from random import shuffle
+from __config__.filepath import DATA_DIR, AUX_DIR, INIT_DIR, OUT_DIR 
 
 from trainingsetup import TrainingSetup
 from utils import sub_namespace, sub_dict
@@ -245,45 +246,10 @@ class Trainer():
     def start(self, timeout=None):
         """
         Begin training
+        :param timeout: max number of hours to spend
         """
         # Workers to update the shared weights from queued gradients
-        
-        # Link weights (using a normal array)
-        for i, q in enumerate(self.setup.link_update_queues):
-            def update():
-                weight = self.setup.link_weights[i]
-                sqsum = self.setup.link_sqsum[i]
-                while True:
-                    item = q.get()
-                    if item is not None:
-                        sqgrad, step = item
-                        sqsum += sqgrad
-                        weight += step.clip(-weight)
-                    else:
-                        break
-            worker = Process(target=update)
-            worker.start()
-        
-        # Pred weights (using a SparseRows object)
-        for i, q in enumerate(self.setup.pred_update_queues):
-            def update():
-                weight = self.setup.pred_weights[i]
-                sqsum = self.setup.pred_sqsum[i]
-                while True:
-                    item = q.get()
-                    if item is not None:
-                        sqgrad, step = item
-                        assert step.next == step.indices.shape[0]
-                        sqsum[step.indices] += sqgrad
-                        weight[step.indices] += step.array.clip(-weight[step.indices])
-                    else:
-                        break
-            
-            worker = Process(target=update)
-            worker.start()
-        
-        # TODO move the above functions to the setup class
-        
+        self.setup.start_update_workers()        
         
         # Files to be trained on
         file_names = os.listdir(self.data_dir)
@@ -291,12 +257,11 @@ class Trainer():
         shuffle(file_names)
         print('{} files to process'.format(len(file_names)))
         
-        sleeps = 0
-        
         # Process the files with a pool of worker processes
-        with Pool(self.processes, self.init) as p:
+        with Pool(self.processes, self.init) as p:  
             self.training = True
             self.error = None
+            initial_time = time()
             p.map_async(self.work, file_names, 1, self.callback, self.error_callback)
             while self.training:
                 if self.error:
@@ -304,12 +269,11 @@ class Trainer():
                     print('Error during training!')
                     self.kill_queues()  # Kill all update workers, so that the process can exit
                     raise self.error
-                elif sleeps == timeout:  # TODO control this
+                elif timeout and time() - initial_time > timeout*3600:
                     raise TimeoutError
                 else:
                     # Save regularly during training
                     self.save_and_sleep()
-                    sleeps += 1
         
         # Once workers are done:
         self.kill_queues()
@@ -323,17 +287,19 @@ class Trainer():
     # The following four functions are passed to Pool.map_async, during training
     
     # Callbacks for Pool.map_async
+    # These just set attributes, which will be checked once the instance stops sleeping
     def callback(self, _):
         self.training = False
     def error_callback(self, e):
         self.error = e
     
-    # Initialise each worker with the train_on_file method,
+    # Initialise each worker with the instance's train_on_file method (as a global variable),
     # so that it is not pickled and piped with each file
     def init(self):
         global train_on_file
         train_on_file = self.train_on_file
     # The train_on_file function will be available in each worker
+    # This is a static method so that it can be pickled - from Python 3.5, see https://bugs.python.org/issue23611
     @staticmethod
     def work(fname):
         train_on_file(fname)
@@ -363,9 +329,9 @@ class Trainer():
             # Remove things that weren't trained
             crucial = copy(self.setup)
             crucial.model = copy(crucial.model)
-            crucial.model.pred_tokens = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'  #!# ...
-            crucial.model.freq = '/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl'
-            crucial.model.pred_name = '/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl'
+            crucial.model.pred_tokens = os.path.join(AUX_DIR, 'core-5-freq.pkl')
+            crucial.model.freq = os.path.join(AUX_DIR, 'core-5-freq.pkl')
+            crucial.model.pred_name = os.path.join(AUX_DIR, 'core-5-vocab.pkl')
             # Remove queues (which can't be pickled)
             crucial.link_update_queues = [q.qsize() for q in crucial.link_update_queues]
             crucial.pred_update_queues = [q.qsize() for q in crucial.pred_update_queues]
@@ -377,7 +343,7 @@ class Trainer():
             pickle.dump(actual_info, f)
     
     @staticmethod
-    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/core-5-nodes', output_name=None, output_dir=None, manager=None):
+    def load(fname, directory=INIT_DIR, data_dir=os.path.join(DATA_DIR,'core-5-nodes'), output_name=None, output_dir=None, manager=None):
         """
         Load trained model from disk
         """

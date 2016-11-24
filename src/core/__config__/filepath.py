@@ -1,4 +1,4 @@
-DATA_DIR = '~/data'
-AUX_DIR = '~/data'
-INIT_DIR = '~/model'
-OUT_DIR = '~/model'
+DATA_DIR = '/anfs/bigdisc/gete2/wikiwoods'
+AUX_DIR = '/anfs/bigdisc/gete2/wikiwoods'
+INIT_DIR = '/anfs/bigdisc/gete2/wikiwoods/sem-func'
+OUT_DIR = '/anfs/bigdisc/gete2/wikiwoods/sem-func'

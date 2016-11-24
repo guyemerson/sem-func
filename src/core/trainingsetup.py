@@ -1,6 +1,7 @@
 import pickle, os
 from numpy import zeros, zeros_like, array, sqrt
-from multiprocessing import Manager
+from multiprocessing import Manager, Process
+from __config__.filepath import INIT_DIR
 
 from utils import make_shared, sparse_like
 
@@ -221,7 +222,7 @@ class TrainingSetup():
         return self.model.background_energy(links, ents)
     
     @staticmethod
-    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', with_tokens=False, manager=None):
+    def load(fname, directory=INIT_DIR, with_tokens=False, manager=None):
         """
         Load a TrainingSetup instance from a file
         """
@@ -255,61 +256,18 @@ class TrainingSetup():
             aux_info = pickle.load(f)
         
         return setup, aux_info
-
-
-class DirectTrainingSetup(TrainingSetup):
-    """
-    Use the gradients directly
-    """
-    def __init__(self, *args, **kwargs):
-        """
-        L1 and L2 will be used directly
-        """
-        raise NotImplementedError
-        
-        super().__init__(*args, **kwargs)
-        
-        self.L1_link *= self.rate_link
-        self.L1_pred *= self.rate_pred
-        self.L2_link = 1 - self.L2_link * self.rate_link
-        self.L2_pred = 1 - self.L2_pred * self.rate_pred
     
-    def descend(self, link_gradients, pred_gradients, pred_list=None):
+    def start_update_workers(self):
         """
-        Descend the gradient and apply regularisation
-        :param link_gradients: gradients for link weights
-        :param pred_gradients: gradients for pred weights
-        :param pred_list: (optional) restrict regularisation to these predicates
+        Start worker processes to manage updates
         """
-        # Update from the gradient
-        for i, grad in enumerate(link_gradients):
-            self.link_weights[i] += grad * self.rate_link
-        for i, grad in enumerate(pred_gradients):
-            self.pred_weights[i] += grad * self.rate_pred
-        
-        # Apply regularisation
-        for wei in self.link_weights:
-            wei *= self.L2_link
-            wei -= self.L1_link
-        for wei in self.pred_global_weights:
-            wei *= self.L2_pred
-            wei -= self.L1_pred
-        if pred_list:
-            for wei in self.pred_local_weights:
-                for p in pred_list:
-                    wei[p] *= self.L2_pred
-                    wei[p] -= self.L1_pred
-        else:
-            for wei in self.pred_local_weights:
-                wei *= self.L2_pred
-                wei -= self.L1_pred
-        
-        # Remove negative weights
-        for wei in self.all_weights:
-            wei.clip(0, out=wei)
-        
-        # Recalculate average predicate
-        self.model.calc_av_pred()
+        # Functions for weight updates
+        for i in range(len(self.link_weights)):
+            worker = Process(target=self.link_update_constructor(i))
+            worker.start()
+        for i in range(len(self.pred_weights)):
+            worker = Process(target=self.pred_update_constructor(i))
+            worker.start()
 
 
 class AdaGradTrainingSetup(TrainingSetup):
@@ -365,7 +323,7 @@ class AdaGradTrainingSetup(TrainingSetup):
                 # Add regularisation
                 grad.array[::n_pred] -= self.L1_pred
                 grad.array[::n_pred] -= self.pred_weights[i][grad.indices[::n_pred]] * self.L2_pred
-                # Increase square sums (or rather, add to queue)
+                # Calculate square
                 sq = grad.array ** 2
                 # Divide by root sum square
                 grad.array /= sqrt((self.pred_sqsum[i][grad.indices] + sq).clip(10**-12))  # Prevent zero-division errors
@@ -378,3 +336,51 @@ class AdaGradTrainingSetup(TrainingSetup):
         
         # Recalculate average predicate
         self.model.calc_av_pred()
+    
+    def link_update_constructor(self, i):
+        """
+        Construct an update function for a link weight matrix.
+        To be used by a Process.
+        """
+        def update():
+            """
+            Update a link weight matrix
+            """
+            weight = self.link_weights[i]
+            sqsum = self.link_sqsum[i]
+            queue = self.link_update_queues[i]
+            while True:
+                item = queue.get()
+                if item is not None:
+                    sqgrad, step = item
+                    sqsum *= self.ada_decay
+                    sqsum += sqgrad
+                    weight += step.clip(-weight)
+                else:
+                    break
+        return update
+    
+    def pred_update_constructor(self, i):
+        """
+        Construct an update function for a pred weight matrix.
+        To be used by a Process.
+        Updates expected as SparseRows objects.
+        """
+        def update():
+            """
+            Update a pred weight matrix
+            """
+            weight = self.pred_weights[i]
+            sqsum = self.pred_sqsum[i]
+            queue = self.pred_update_queues[i]
+            while True:
+                item = queue.get()
+                if item is not None:
+                    sqgrad, step = item
+                    assert step.next == step.indices.shape[0]
+                    sqsum[step.indices] *= self.ada_decay
+                    sqsum[step.indices] += sqgrad
+                    weight[step.indices] += step.array.clip(-weight[step.indices])
+                else:
+                    break
+        return update

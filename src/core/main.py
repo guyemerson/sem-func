@@ -3,7 +3,7 @@ import numpy as np
 from multiprocessing import Manager
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
-from trainingsetup import DirectTrainingSetup, AdaGradTrainingSetup
+from trainingsetup import AdaGradTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
 from utils import sub_namespace, sub_dict
 from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR
@@ -78,9 +78,7 @@ def setup_trainer(**kw):
                                  "l1_ent",
                                  "ent_steps",
                                  "pred_steps"])
-    if kw['setup'] == 'direct':
-        setup_class = DirectTrainingSetup
-    elif kw['setup'] == 'adagrad':
+    if kw['setup'] == 'adagrad':
         setup_class = AdaGradTrainingSetup
         setup_kwargs.update(sub_dict(kw, ["ada_decay"]))
     else:
