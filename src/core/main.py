@@ -1,4 +1,5 @@
 import sys, os, pickle, numpy, argparse
+import numpy as np
 from multiprocessing import Manager
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
@@ -121,6 +122,11 @@ if __name__ == "__main__":
     parser.add_argument('-init_bias', type=float, default=5)
     parser.add_argument('-init_card', type=float, default=8)
     parser.add_argument('-init_range', type=float, default=1)
+    parser.add_argument('-init_ent_bias', type=float, default=5)
+    parser.add_argument('-init_link_str', type=float, default=3)
+    parser.add_argument('-init_verb_prop', type=float, default=0.5)
+    parser.add_argument('-init_pat_prop', type=float, default=0.6)
+    parser.add_argument('-init_ag_prop', type=float, default=0.6)
     # Training setup parameters
     parser.add_argument('-setup', type=str, default='adagrad')
     parser.add_argument('-rate', type=float, default=0.01)
@@ -143,10 +149,12 @@ if __name__ == "__main__":
     parser.add_argument('-processes', type=int, default=50)
     parser.add_argument('-ent_burnin', type=int, default=10)
     parser.add_argument('-pred_burnin', type=int, default=2)
+    parser.add_argument('-seed', type=int, default=0)
     
     args = parser.parse_args()
     arg_dict = dict(args._get_kwargs())
     
+    np.random.seed(arg_dict['seed'])
     trainer = setup_trainer(**arg_dict)
     
     print("Set up complete, beginning training...")

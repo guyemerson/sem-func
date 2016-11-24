@@ -42,9 +42,8 @@ n_scores = [float(x[3]) for x in n_simlex]
 v_scores = [float(x[3]) for x in v_simlex]
 a_scores = [float(x[3]) for x in a_simlex]
 
-from math import sqrt
 def sim(u,v):
-    return np.dot(u,v) / sqrt(np.dot(u,u) * np.dot(v,v)) 
+    return np.dot(u,v) / np.sqrt(np.dot(u,u) * np.dot(v,v)) 
 
 def sparsim_all(a, b, pos, sparse_mat):
     scores = []
@@ -65,7 +64,8 @@ def test(setup, verbose=True):
     v_mysim_all = np.nan_to_num([sparsim_all(x[0], x[1], 'v', sparse_mat=setup.model.pred_wei) for x in v_simlex])
     scores = (spearmanr(n_scores, n_mysim_all), spearmanr(v_scores, v_mysim_all))
     if verbose:
-        print(*scores, sep='\n')
+        print("noun:", scores[0])
+        print("verb:", scores[1])
     return scores
 
 common_simlex = [x for x in n_simlex if freq.get(n_flookup.get(x[0]),0)>1000 and freq.get(n_flookup.get(x[1]),0)>1000]
@@ -95,7 +95,8 @@ def test_ws(setup, verbose=True):
     my_ws_rel = np.nan_to_num([sparsim_all(x[0], x[1], 'n', sparse_mat=setup.model.pred_wei) for x in ws_rel])
     scores = (spearmanr(ws_sim_scores, my_ws_sim), spearmanr(ws_rel_scores, my_ws_rel))
     if verbose:
-        print(*scores, sep='\n')
+        print("sim:", scores[0])
+        print("rel:", scores[1])
     return scores
 
 def test_all(setup, verbose=True):
@@ -137,7 +138,7 @@ def compare(old, new, n=20, which='nv', direction='both'):
 
 
 def mat_sim(a,b):
-    return (a * b).sum() / sqrt((a ** 2).sum() * (b ** 2).sum())
+    return (a * b).sum() / np.sqrt((a ** 2).sum() * (b ** 2).sum())
 
 def similarity(a, b, wv, pos):
     try:

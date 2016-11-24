@@ -1,7 +1,7 @@
 import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
-from multiprocessing import Pool, Process, Manager
+from multiprocessing import Pool, Process, Manager, TimeoutError
 from time import sleep
 from random import shuffle
 
@@ -242,7 +242,7 @@ class Trainer():
                              minibatch = self.minibatch)
         self.completed_files.append(fname)
         
-    def start(self):
+    def start(self, timeout=None):
         """
         Begin training
         """
@@ -291,6 +291,8 @@ class Trainer():
         shuffle(file_names)
         print('{} files to process'.format(len(file_names)))
         
+        sleeps = 0
+        
         # Process the files with a pool of worker processes
         with Pool(self.processes, self.init) as p:
             self.training = True
@@ -302,9 +304,12 @@ class Trainer():
                     print('Error during training!')
                     self.kill_queues()  # Kill all update workers, so that the process can exit
                     raise self.error
+                elif sleeps == timeout:  # TODO control this
+                    raise TimeoutError
                 else:
                     # Save regularly during training
                     self.save_and_sleep()
+                    sleeps += 1
         
         # Once workers are done:
         self.kill_queues()
@@ -372,7 +377,7 @@ class Trainer():
             pickle.dump(actual_info, f)
     
     @staticmethod
-    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/ore-5-nodes', output_name=None, output_dir=None, manager=None):
+    def load(fname, directory='/anfs/bigdisc/gete2/wikiwoods/sem-func', data_dir='/anfs/bigdisc/gete2/wikiwoods/core-5-nodes', output_name=None, output_dir=None, manager=None):
         """
         Load trained model from disk
         """
@@ -380,7 +385,7 @@ class Trainer():
             output_dir = directory
         if output_name == None:
             output_name = fname
-            while not os.path.exists(os.path.join(output_dir, output_name)):
+            while os.path.exists(os.path.join(output_dir, output_name)+'.pkl'):
                 output_name += '_ctd'
         
         if manager is None:
