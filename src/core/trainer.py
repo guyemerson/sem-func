@@ -1,10 +1,10 @@
 import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
-from multiprocessing import Pool, Process, Manager, TimeoutError
+from multiprocessing import Pool, Manager, TimeoutError
 from time import sleep, time
 from random import shuffle
-from __config__.filepath import DATA_DIR, AUX_DIR, INIT_DIR, OUT_DIR 
+from __config__.filepath import DATA_DIR, AUX_DIR, INIT_DIR, OUT_DIR, VOCAB_FILE, FREQ_FILE
 
 from trainingsetup import TrainingSetup
 from utils import sub_namespace, sub_dict
@@ -190,11 +190,10 @@ class Trainer():
     """
     Handle processes during training
     """
-    def __init__(self, interface, manager, data_dir, output_name, processes, epochs, minibatch, ent_burnin, pred_burnin):
+    def __init__(self, interface, data_dir, output_name, processes, epochs, minibatch, ent_burnin, pred_burnin):
         """
         Initialise the trainer
         :param interface: DataInterface object
-        :param manager: a multiprocessing.Manager object to manage a list of completed files
         :param data_dir: directory including data files
         :param output_name: name for output files (without file extension)
         :param processes: number of processes
@@ -222,6 +221,7 @@ class Trainer():
                                              "pred_burnin"])
         self.aux_info["neg_samples"] = self.interface.NEG
         self.aux_info["particle"] = self.interface.neg_nodes
+        manager = Manager()  # a multiprocessing.Manager object to manage a shared list of completed files
         self.completed_files = manager.list()
         
         self.training = False
@@ -303,6 +303,7 @@ class Trainer():
     @staticmethod
     def work(fname):
         train_on_file(fname)
+        # TODO - sometimes one worker hangs...
     
     def kill_queues(self):
         """
@@ -329,9 +330,9 @@ class Trainer():
             # Remove things that weren't trained
             crucial = copy(self.setup)
             crucial.model = copy(crucial.model)
-            crucial.model.pred_tokens = os.path.join(AUX_DIR, 'core-5-freq.pkl')
-            crucial.model.freq = os.path.join(AUX_DIR, 'core-5-freq.pkl')
-            crucial.model.pred_name = os.path.join(AUX_DIR, 'core-5-vocab.pkl')
+            crucial.model.pred_tokens = os.path.join(FREQ_FILE)
+            crucial.model.freq = os.path.join(FREQ_FILE)
+            crucial.model.pred_name = os.path.join(VOCAB_FILE)
             # Remove queues (which can't be pickled)
             crucial.link_update_queues = [q.qsize() for q in crucial.link_update_queues]
             crucial.pred_update_queues = [q.qsize() for q in crucial.pred_update_queues]
@@ -343,7 +344,7 @@ class Trainer():
             pickle.dump(actual_info, f)
     
     @staticmethod
-    def load(fname, directory=INIT_DIR, data_dir=os.path.join(DATA_DIR,'core-5-nodes'), output_name=None, output_dir=None, manager=None):
+    def load(fname, directory=INIT_DIR, data_dir=os.path.join(DATA_DIR,'core-5-nodes'), output_name=None, output_dir=None):
         """
         Load trained model from disk
         """
@@ -354,17 +355,13 @@ class Trainer():
             while os.path.exists(os.path.join(output_dir, output_name)+'.pkl'):
                 output_name += '_ctd'
         
-        if manager is None:
-            manager = Manager()
-        
-        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True, manager=manager)
+        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True)
         
         interface = DataInterface(setup, (),
                                   **sub_dict(aux_info, ['particle',
                                                         'neg_samples']))
         
         trainer = Trainer(interface,
-                          manager,
                           data_dir = data_dir,
                           output_name = os.path.join(output_dir, output_name),
                           **sub_dict(aux_info, ['processes',

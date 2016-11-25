@@ -1,7 +1,7 @@
 import pickle, os
 from numpy import zeros, zeros_like, array, sqrt
 from multiprocessing import Manager, Process
-from __config__.filepath import INIT_DIR
+from __config__.filepath import INIT_DIR, AUX_DIR
 
 from utils import make_shared, sparse_like
 
@@ -10,7 +10,7 @@ class TrainingSetup():
     A semantic function model with a training regime.
     Expects preprocessed data during training.
     """
-    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l1_ent, l2, l2_ratio, l2_ent, ent_steps, pred_steps, manager):
+    def __init__(self, model, rate, rate_ratio, l1, l1_ratio, l1_ent, l2, l2_ratio, l2_ent, ent_steps, pred_steps):
         """
         Initialise the training setup
         :param model: the semantic function model
@@ -24,14 +24,15 @@ class TrainingSetup():
         :param l2_ent: L2 regularisation strength for entity biases
         :param ent_steps: (default 1) number of Metropolis-Hastings steps to make when resampling latent entities
         :param pred_steps: (default 1) number of Metropolis-Hastings steps to make when resampling negative predicates
-        :param manager: a multiprocessing.Manager object to manage update Queues
         """
         # Semantic function model
         self.model = model
         self.inherit()
-        # Hyperparameters
+        # Hyperparameters:
+        # Learning rate
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
+        # Regularisation
         self.L2_link = 2 * l2 / sqrt(l2_ratio)
         self.L2_pred = 2 * l2 * sqrt(l2_ratio)
         self.L1_link = l1 / sqrt(l1_ratio)
@@ -41,9 +42,6 @@ class TrainingSetup():
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
-        # Queues for weight updates
-        self.link_update_queues = [manager.Queue() for _ in self.link_weights]
-        self.pred_update_queues = [manager.Queue() for _ in self.pred_weights]
     
     def inherit(self):
         """
@@ -222,7 +220,7 @@ class TrainingSetup():
         return self.model.background_energy(links, ents)
     
     @staticmethod
-    def load(fname, directory=INIT_DIR, with_tokens=False, manager=None):
+    def load(fname, directory=INIT_DIR, with_tokens=False, with_workers=False):
         """
         Load a TrainingSetup instance from a file
         """
@@ -231,25 +229,21 @@ class TrainingSetup():
         
         # Load untrained data about preds
         if isinstance(setup.model.pred_name, str):
-            with open(setup.model.pred_name, 'rb') as f:
+            with open(os.path.join(AUX_DIR, setup.model.pred_name), 'rb') as f:
                 setup.model.pred_name = pickle.load(f)
         if isinstance(setup.model.freq, str):
-            with open(setup.model.freq, 'rb') as f:
+            with open(os.path.join(AUX_DIR, setup.model.freq), 'rb') as f:
                 freq = pickle.load(f)
             setup.model.freq = array(freq) / sum(freq)
             if with_tokens:
                 setup.model.get_pred_tokens(freq)
         
-        # Set up queues
-        if manager is None:
-            manager = Manager()
-        if type(setup.link_update_queues[0]) == int:
-            setup.link_update_queues = [manager.Queue() for _ in setup.link_weights]
-        if type(setup.pred_update_queues[0]) == int:
-            setup.pred_update_queues = [manager.Queue() for _ in setup.pred_weights]
-        
         # Make weights shared
         setup.make_shared()
+        
+        # (Optionally) start workers for weight updates:
+        if with_workers:
+            setup.start_update_workers() 
         
         # Load aux info
         with open(os.path.join(directory, fname)+'.aux.pkl', 'rb') as f:
@@ -261,7 +255,11 @@ class TrainingSetup():
         """
         Start worker processes to manage updates
         """
-        # Functions for weight updates
+        # Queues for weight updates
+        manager = Manager()
+        self.link_update_queues = [manager.Queue() for _ in self.link_weights]
+        self.pred_update_queues = [manager.Queue() for _ in self.pred_weights]
+        # Processes to consume the queued weight updates
         for i in range(len(self.link_weights)):
             worker = Process(target=self.link_update_constructor(i))
             worker.start()
@@ -272,7 +270,7 @@ class TrainingSetup():
 
 class AdaGradTrainingSetup(TrainingSetup):
     """
-    Use AdaGrad
+    Use AdaGrad (with decay of the sum of the squared gradients, as in RMSprop)
     """
     def __init__(self, *args, ada_decay=1, **kwargs):
         """
@@ -281,8 +279,8 @@ class AdaGradTrainingSetup(TrainingSetup):
         super().__init__(*args, **kwargs)
         
         # Squared gradients
-        assert ada_decay > 0
-        assert ada_decay < 1
+        if not (ada_decay > 0 and ada_decay <= 1):
+            raise ValueError('ada_decay must be in the range (0,1]')
         self.ada_decay = ada_decay
         self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
         self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]

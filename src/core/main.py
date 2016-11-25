@@ -1,17 +1,16 @@
 import sys, os, pickle, numpy, argparse
 import numpy as np
-from multiprocessing import Manager
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
 from trainingsetup import AdaGradTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
 from utils import sub_namespace, sub_dict
-from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR
+from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR, VOCAB_FILE, FREQ_FILE
 
 def setup_trainer(**kw):
     """
-    Setup a semantic function model, reading for training
-    """    
+    Setup a semantic function model, ready for training
+    """
     # Set input and output
     DATA = os.path.join(DATA_DIR, 'core-{}-nodes'.format(kw['thresh']))
     
@@ -25,17 +24,14 @@ def setup_trainer(**kw):
     OUTPUT = output_template.format(kw['thresh'], kw['suffix'])
     # Save under OUTPUT.pkl and OUTPUT.aux.pkl
     
-    VOCAB = os.path.join(AUX_DIR, 'core-5-vocab.pkl')
-    FREQ = os.path.join(AUX_DIR, 'core-5-freq.pkl')
-    
     # Check the output path is clear
     if os.path.exists(OUTPUT+'.pkl'):
         raise Exception('File already exists')
     
     # Load vocab for model
-    with open(VOCAB, 'rb') as f:
+    with open(os.path.join(AUX_DIR, VOCAB_FILE), 'rb') as f:
         preds = pickle.load(f)
-    with open(FREQ, 'rb') as f:
+    with open(os.path.join(AUX_DIR, FREQ_FILE), 'rb') as f:
         pred_freq = pickle.load(f)
     links = ['ARG1', 'ARG2']
     
@@ -43,6 +39,10 @@ def setup_trainer(**kw):
     for i in range(len(pred_freq)):
         if pred_freq[i] < kw['thresh']:
             pred_freq[i] = 0
+    
+    # Set random seed, if specified
+    if kw['seed']:
+        np.random.seed(kw['seed'])
     
     # Set up model
     model_kwargs = sub_dict(kw, ["dims",
@@ -64,9 +64,6 @@ def setup_trainer(**kw):
         raise Exception('model class not recognised')
     model = model_class(preds, links, pred_freq, verbose=False, **model_kwargs)
     
-    # Set up manager for shared writable objects
-    manager = Manager()
-    
     # Set up training hyperparameters
     setup_kwargs = sub_dict(kw, ["rate",
                                  "rate_ratio",
@@ -83,7 +80,7 @@ def setup_trainer(**kw):
         setup_kwargs.update(sub_dict(kw, ["ada_decay"]))
     else:
         raise Exception('setup class not recognised')
-    setup = setup_class(model, manager=manager, **setup_kwargs)
+    setup = setup_class(model, **setup_kwargs)
     
     # Set up training (without data)
     particle = create_particle(3,2,5)
@@ -98,7 +95,6 @@ def setup_trainer(**kw):
                                    "pred_burnin"])
     
     trainer = Trainer(interface,
-                      manager,
                       data_dir = DATA,
                       output_name = OUTPUT,
                       **trainer_kwargs)
@@ -152,7 +148,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     arg_dict = dict(args._get_kwargs())
     
-    np.random.seed(arg_dict['seed'])
     trainer = setup_trainer(**arg_dict)
     
     print("Set up complete, beginning training...")
