@@ -202,7 +202,7 @@ class SemFuncModel():
             print(old_ent)
             for wei in self.pred_local_weights:
                 print(wei[pred])
-            raise Exception('prob 0!')
+            raise Exception('prob 0!')  # TODO deal with this
         
         ratio = new_prob / old_prob
         # TODO Need to deal with one or both being nan...
@@ -221,7 +221,7 @@ class SemFuncModel():
             # (Use an approximation, rather than summing over all predicates...)
             negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])  #!# extra param
         
-        ratio *= exp(negenergy)
+        ratio *= exp(negenergy)  # TODO deal with overflow errors
         
         # Change the vector accordingly
         if self.metro_switch(ratio):
@@ -877,6 +877,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
 class SemFuncModel_FactorisedPreds(SemFuncModel):
     """
     SemFuncModel with factorised pred parameters
+    Deprecated... global pred weights will not be updated correctly...
     """
     def __init__(self, preds, links, freq, dims, card, embed_dims, init_bias=0, init_card=None, init_range=0):
         """

@@ -2,9 +2,9 @@ import sys, os, pickle, numpy, argparse
 import numpy as np
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
-from trainingsetup import AdaGradTrainingSetup
+from trainingsetup import AdaGradTrainingSetup, AdamTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
-from utils import sub_namespace, sub_dict
+from utils import sub_dict
 from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR, VOCAB_FILE, FREQ_FILE
 
 def setup_trainer(**kw):
@@ -78,6 +78,10 @@ def setup_trainer(**kw):
     if kw['setup'] == 'adagrad':
         setup_class = AdaGradTrainingSetup
         setup_kwargs.update(sub_dict(kw, ["ada_decay"]))
+    elif kw['setup'] == 'adam':
+        setup_class = AdamTrainingSetup
+        setup_kwargs.update(sub_dict(kw, ["mean_decay",
+                                          "var_decay"]))
     else:
         raise Exception('setup class not recognised')
     setup = setup_class(model, **setup_kwargs)
@@ -134,6 +138,8 @@ if __name__ == "__main__":
     parser.add_argument('-ent_steps', type=int, default=10)
     parser.add_argument('-pred_steps', type=int, default=1)
     parser.add_argument('-ada_decay', type=float, default=1-10**-8)
+    parser.add_argument('-mean_decay', type=float, default=0.9)
+    parser.add_argument('-var_decay', type=float, default=0.999)
     # Negative sample parameters
     parser.add_argument('-neg_samples', type=int, default=5)
     parser.add_argument('-particle', type=int, nargs=3, default=(3,2,5))
