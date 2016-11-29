@@ -3,7 +3,7 @@ from numpy import zeros, zeros_like, array, sqrt
 from multiprocessing import Manager, Process
 from __config__.filepath import INIT_DIR, AUX_DIR
 
-from utils import make_shared, sparse_like
+from utils import make_shared, sparse_like, shared_zeros_like
 
 class TrainingSetup():
     """
@@ -302,8 +302,8 @@ class AdaGradTrainingSetup(TrainingSetup):
         self.ada_decay = ada_decay
         
         # Squared gradients
-        self.link_sqsum = [make_shared(zeros_like(m)) for m in self.link_weights]
-        self.pred_sqsum = [make_shared(zeros_like(m)) for m in self.pred_weights]
+        self.link_sqsum = [shared_zeros_like(m) for m in self.link_weights]
+        self.pred_sqsum = [shared_zeros_like(m) for m in self.pred_weights]
     
     def make_shared(self):
         """
@@ -424,10 +424,10 @@ class AdamTrainingSetup(TrainingSetup):
         self.var_decay = var_decay
         
         # Moving averages of gradient and squared gradient
-        self.link_mean = [make_shared(zeros_like(m)) for m in self.link_weights]
-        self.pred_mean = [make_shared(zeros_like(m)) for m in self.pred_weights]
-        self.link_var = [make_shared(zeros_like(m)) for m in self.link_weights]
-        self.pred_var = [make_shared(zeros_like(m)) for m in self.pred_weights]
+        self.link_mean = [shared_zeros_like(m) for m in self.link_weights]
+        self.pred_mean = [shared_zeros_like(m) for m in self.pred_weights]
+        self.link_var = [shared_zeros_like(m) for m in self.link_weights]
+        self.pred_var = [shared_zeros_like(m) for m in self.pred_weights]
     
     def make_shared(self):
         """

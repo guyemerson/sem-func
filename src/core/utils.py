@@ -16,6 +16,29 @@ def make_shared(array):
     # Reshape the new array
     return flat_array.reshape(array.shape)
 
+def shared_zeros(shape, ctype='d', dtype='float64'):
+    """
+    Initialise a shared numpy array, filled with zeros
+    """
+    # Create a flat shared array
+    size = int(np.prod(shape))
+    shared = Array(ctype, size)
+    # Create a new numpy array from the shared array
+    flat_array = np.frombuffer(shared._obj, dtype)
+    # Reshape the new array
+    return flat_array.reshape(shape)
+
+def shared_zeros_like(array):
+    """
+    Initialise a shared numpy array, filled with zeros, like another array
+    """
+    # Get the data types for the array
+    dtype = array.dtype
+    ctype = np.ctypeslib.as_ctypes(array)
+    while not isinstance(ctype, str): ctype = ctype._type_
+    # Initialise the array
+    return shared_zeros(array.shape, ctype, dtype)
+
 def is_verb(string):
     """
     Check if a predstring is for a verb or a noun

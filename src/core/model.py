@@ -5,7 +5,7 @@ from scipy.spatial.distance import cosine
 from scipy.special import expit
 from warnings import warn
 
-from utils import make_shared, is_verb
+from utils import make_shared, shared_zeros, is_verb
 
 
 class SemFuncModel():
@@ -16,10 +16,14 @@ class SemFuncModel():
         raise NotImplementedError
     
     def get_pred_tokens(self, freq):
-        pred_toks = []  # fill with pred tokens, for sampling preds
-        for i, f in enumerate(freq):  # The original ints, not the normalised values
-            pred_toks.extend([i]*f)
-        self.pred_tokens = make_shared(array(pred_toks))
+        """
+        Initialise a shared array of predicate tokens
+        """
+        self.pred_tokens = shared_zeros((freq.sum(),), 'l', 'int64')
+        i = 0
+        for p, f in enumerate(freq):  # The original ints, not the normalised values
+            self.pred_tokens[i:i+f] = p
+            i += f
     
     # Semantic functions
     
@@ -705,10 +709,9 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.link_name = links
         
         # Fixed parameters
-        if isinstance(freq, list):
-            freq = array(freq)
-        self.freq = freq / sum(freq)
-        assert len(freq) == len(preds)
+        self.freq = make_shared(freq) / freq.sum()
+        if len(freq) != len(preds):
+            raise ValueError('Number of predicate frequencies must match number of predicates')
         
         # Constants
         self.D = dims
@@ -719,20 +722,20 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         ### Trained weights ###
         
         # Initialise link weights
-        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
+        self.link_wei = shared_zeros((self.L, self.D, self.D))  # link, from, to
         mid = int(dims * init_verb_prop)  # N/V proportion
         agent_high = mid + int((dims-mid) * init_ag_prop)  # agent proportion
         patient_low = mid + int((dims-mid) * (1-init_pat_prop))  # patient proportion
         self.link_wei[0, :mid, mid:agent_high] = init_link_str  # initial strength
         self.link_wei[1, :mid, patient_low:] = init_link_str
-        self.ent_bias = zeros(self.D)
+        self.ent_bias = shared_zeros(self.D)
         if init_ent_bias is None:
             init_ent_bias = log(self.D/self.C - 1)  # so that expit(bias) = C/D
         self.ent_bias += init_ent_bias
         
         # Initialise pred weights
         if init_card is None: init_card = dims/2
-        self.pred_wei = random.uniform(0, init_range, (self.V, self.D))
+        self.pred_wei = make_shared(random.uniform(0, init_range, (self.V, self.D)))
         for i,p in enumerate(preds):
             if is_verb(p):
                 self.pred_wei[i, mid:] = 0
@@ -741,7 +744,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
                 self.pred_wei[i, :mid] = 0
                 self.pred_wei[i, mid:] *= random.binomial(1, 2*init_card / dims, mid)
         
-        self.pred_bias = empty((self.V,))
+        self.pred_bias = shared_zeros((self.V,))
         self.pred_bias[:] = init_bias
         
         # Ignore preds that don't occur
@@ -751,10 +754,8 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.calc_av_pred()  # average predicate
         self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
-        # For multiprocessing:
-        if self.verbose:
-            print("Converting to shared memory")
-        self.make_shared()
+        # Package for training setup
+        self.collect()
     
     def make_shared(self):
         """
@@ -765,8 +766,13 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.ent_bias = make_shared(self.ent_bias)
         self.pred_wei = make_shared(self.pred_wei)
         self.pred_bias = make_shared(self.pred_bias)
-        
-        # Package for training setup
+        # Update pointers in collected lists of weights
+        self.collect()
+    
+    def collect(self):
+        """
+        Package the weights into lists for training setup
+        """
         self.link_local_weights = [self.link_wei]
         self.link_global_weights = [self.ent_bias]
         self.link_weights = self.link_local_weights + self.link_global_weights
@@ -914,13 +920,13 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
         self.E = embed_dims
         
         # Trained weights
-        self.link_wei = zeros((self.L, self.D, self.D))  # link, from, to
+        self.link_wei = shared_zeros((self.L, self.D, self.D))  # link, from, to
         if init_card is None: init_card = dims
         self.pred_embed = random.uniform(0, init_range, (self.V, self.E)) \
                         * random.binomial(1, init_card / dims, (self.V, self.E))
         self.pred_factor = random.uniform(0, init_range, (self.E, self.D)) \
                          * random.binomial(1, init_card / dims, (self.E, self.D))
-        self.pred_bias = empty((self.V,))
+        self.pred_bias = shared_zeros((self.V,))
         self.pred_bias[:] = init_bias
         
         # Ignore preds that don't occur
