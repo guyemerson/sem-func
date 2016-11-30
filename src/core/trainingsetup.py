@@ -1,8 +1,8 @@
 import pickle, os
 from numpy import zeros, zeros_like, array, sqrt
 from multiprocessing import Manager, Process
-from __config__.filepath import INIT_DIR, AUX_DIR
 
+from __config__.filepath import INIT_DIR, AUX_DIR
 from utils import make_shared, sparse_like, shared_zeros_like
 
 class TrainingSetup():
@@ -193,7 +193,7 @@ class TrainingSetup():
             self.resample_conditional_batch(pos_batch, pos_ents)
         for _ in range(self.pred_steps):
             self.resample_pred_batch(pos_batch, pos_ents, neg_preds)
-        self.resample_background_batch(neg_batch, neg_ents)
+        self.resample_background_batch(neg_batch, neg_ents)  # TODO control how many particle steps are taken
         
         # Observe gradients
         link_dels, pred_dels, link_counts = self.observe_latent_batch(pos_batch, pos_ents, neg_preds)
@@ -237,6 +237,8 @@ class TrainingSetup():
                 links.append([start, out_ids[i], lab])
         return self.model.background_energy(links, ents)
     
+    # Loading from file
+    
     @staticmethod
     def load(fname, directory=INIT_DIR, with_tokens=False, with_workers=False):
         """
@@ -268,6 +270,8 @@ class TrainingSetup():
             aux_info = pickle.load(f)
         
         return setup, aux_info
+    
+    # Multiprocessing
     
     def start_update_workers(self):
         """
@@ -463,7 +467,7 @@ class AdamTrainingSetup(TrainingSetup):
             var = self.var_decay * self.link_var[i] + sq  #!# Use bias-corrected estimate?
             step = self.rate_link * mean / sqrt(var.clip(10**-12))  # Prevent zero-division errors
             # Descend (or rather, add to queue)
-            self.link_update_queues[i].put((step, grad, sq))
+            self.link_update_queues[i].put((grad, sq, step))
         
         for i, grad in enumerate(pred_gradients):
             # Add regularisation
@@ -479,7 +483,7 @@ class AdamTrainingSetup(TrainingSetup):
             var = self.var_decay * self.pred_var[i][grad.indices] + sq  #!# Use bias-corrected estimate?
             step = self.rate_pred * mean / sqrt(var.clip(10**-12))  # Prevent zero-division errors
             # Descend (or rather, add to queue)
-            self.pred_update_queues[i].put((step, grad, sq))
+            self.pred_update_queues[i].put((grad, sq, step))
         
         # Recalculate average predicate
         self.model.calc_av_pred()
@@ -502,7 +506,7 @@ class AdamTrainingSetup(TrainingSetup):
             while True:
                 item = queue.get()
                 if item is not None:
-                    step, grad, sq = item
+                    grad, sq, step = item
                     mean *= self.mean_decay
                     mean += grad
                     var *= self.var_decay
@@ -531,13 +535,20 @@ class AdamTrainingSetup(TrainingSetup):
             while True:
                 item = queue.get()
                 if item is not None:
-                    step, grad, sq = item
-                    assert step.next == step.indices.shape[0]
-                    mean[step.indices] *= self.mean_decay
-                    mean[step.indices] += grad
-                    var[step.indices] *= self.var_decay
-                    var[step.indices] += sq
-                    weight[step.indices] += step.array.clip(-weight[step.indices])
+                    grad, sq, step = item
+                    assert grad.next == grad.indices.shape[0]
+                    mean[grad.indices] *= self.mean_decay
+                    mean[grad.indices] += grad.array
+                    var[grad.indices] *= self.var_decay
+                    var[grad.indices] += sq
+                    weight[grad.indices] += step.clip(-weight[grad.indices])
                 else:
                     break
         return update
+
+
+class AdaDeltaTrainingSetup(TrainingSetup):
+    pass
+
+class AdameltaTrainingSetup(TrainingSetup):
+    pass
