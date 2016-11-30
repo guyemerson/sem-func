@@ -12,7 +12,7 @@ class SemFuncModel():
     """
     The core semantic function model, including the background distribution
     """
-    def __init__(self, *arg, **kwargs):
+    def __init__(self, *args, **kwargs):
         raise NotImplementedError
     
     def get_pred_tokens(self, freq):
@@ -33,6 +33,14 @@ class SemFuncModel():
         :param ent: an entity vector
         :param pred: a predicate
         :return: a probability
+        """
+        raise NotImplementedError
+    
+    def prob_all(self, ent):
+        """
+        Calculate the probabilities of all predicates being true of an entity
+        :param ent: an entity vector
+        :return: a probability for each predicate
         """
         raise NotImplementedError
     
@@ -396,6 +404,109 @@ class SemFuncModel():
         """
         raise NotImplementedError
     
+    def cosine_of_samples(self, pred1, pred2, **kwargs):
+        """
+        Calculate the average cosine distance (1 - normalised dot product)
+        between sampled entity vectors conditioned on a pair of predicates
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :param **kwargs: sampling options
+        :return: the cosine distance
+        """
+        # As dot products are distributive over addition, and all samples have the same length,
+        # we can take the dot product of the sums
+        mean1 = self.mean_sample_from_pred(pred1, **kwargs)
+        mean2 = self.mean_sample_from_pred(pred2, **kwargs)
+        return cosine(mean1, mean2)
+    
+    def implies(self, pred1, pred2, **kwargs):
+        """
+        Calculate the probability that the truth of pred1 implies the truth of pred2
+        :param pred1: a predicate
+        :param pred2: a predicate
+        :param **kwargs: sampling options
+        :return: the probability pred1 implies pred2
+        """
+        total = 0
+        ents = self.sample_from_pred(pred1, chosen=False, **kwargs)
+        n = 0
+        for v in ents:
+            total += self.prob(v, pred2)
+            n += 1
+        return total/n
+    
+    def distance_matrix_from_parameters(self):
+        """
+        Find the distances between predicates, based on their parameters
+        :return: distance matrix 
+        """
+        raise NotImplementedError
+    
+    def closest_pairs(self, number, metric, **kwargs):
+        """
+        Find the closest pairs of preds 
+        :param number: how many pairs to return
+        :param metric: the metric to use to find distances; a function, or one of the strings:
+            'samples' - use cosine of samples
+            'parameters' - use cosine of parameters
+        :kwargs: will be passed to the metric, as appropriate
+        :return: the names of the closest pairs of preds
+        """
+        # Get the distance matrix
+        if metric == 'samples':
+            matrix = self.distance_matrix_from_samples(**kwargs)
+        elif metric == 'parameters':
+            matrix = self.distance_matrix_from_parameters()
+        else:
+            matrix = self.distance_matrix(metric)
+        # Ignore the diagonal and below it
+        matrix += tril(zeros_like(matrix) + inf)
+        # Find the indices of the smallest distances
+        flat_indices = matrix.argpartition(number-1, None)[:number]  # None: flatten array
+        indices = unravel_index(flat_indices, matrix.shape)  # a tuple of arrays
+        values = matrix[indices]
+        ind_of_val = values.argsort()[::-1]
+        ind_tuples = list(zip(*indices))
+        sorted_tuples = [ind_tuples[i] for i in ind_of_val]
+        # Return these as preds
+        preds = [(self.pred_name[i], self.pred_name[j]) for i,j in sorted_tuples]
+        return preds
+    
+    def dot_product_of_samples(self, pred1, pred2, **kwargs):
+        """
+        Get the dot products of samples between two predicates
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param **kwargs: sampling options
+        """
+        pred1_samples = array(list(self.sample_from_pred(pred1, **kwargs)), dtype=float)
+        pred2_samples = array(list(self.sample_from_pred(pred2, **kwargs)), dtype=float)
+        return tensordot(pred1_samples, pred2_samples, (1,1)) / self.C
+    
+    def probability_of_match(self, pred1, pred2, threshold, **kwargs):
+        """
+        Find the probability that entities conditioned on two predicates are very similar
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param threshold: the similarity threshold (from 0 to 1)
+        :param **kwargs: sampling options
+        """
+        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
+        above = (dots > threshold).sum()
+        return above / dots.size
+    
+    def mean_sd_dot(self, pred1, pred2, **kwargs):
+        """
+        Get the mean and standard deviation of the dot products of samples between two predicates
+        :param pred1: a predicate index
+        :param pred2: another predicate index
+        :param **kwargs: sampling options
+        """
+        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
+        return dots.mean(), dots.std()
+    
+    # Generation
+    
     def sample_from_pred(self, pred, samples=100, burnin=500, interval=50, chosen=True, init='max'):
         """
         Sample entity vectors conditioned on a predicate
@@ -428,6 +539,7 @@ class SemFuncModel():
         :param burnin: (default 500) number of samples to skip before averaging starts
         :param interval: (default 50) number of samples to take between those used in the average
         :param chosen: (default True) whether to condition on the pred being chosen or being true
+        :param init: (default max) how to initialise vectors - choices are 'old' (init_vec_from_pred) or 'max' (max_vec_from_pred)
         :param keep: array or list of which nodes' vectors should be returned (default everything)
         :return: a generator of entity vectors (as matrices)
         """
@@ -468,10 +580,9 @@ class SemFuncModel():
         :param obj: object predicate index
         :return: a generator of entity vectors (as matrices)
         """
-        nodes = []
-        nodes.append((subj, (), (), (0,), (1,)))
-        nodes.append((verb, (0,1), (0,2), (), ()))
-        nodes.append((obj, (), (), (1,), (1,)))
+        nodes = [(subj, (),    (),    (0,), (1,)),
+                 (verb, (0,1), (0,2), (),   ()  ),
+                 (obj,  (),    (),    (1,), (1,))]
         return self.sample_from_graph(nodes, **kwargs)
     
     def sample_from_sv(self, subj, verb, **kwargs):
@@ -481,9 +592,8 @@ class SemFuncModel():
         :param verb: verb predicate index
         :return: a generator of entity vectors (as matrices)
         """
-        nodes = []
-        nodes.append((subj, (), (), (0,), (1,)))
-        nodes.append((verb, (0,), (0,), (), ()))
+        nodes = [(subj, (),   (),   (0,), (1,)),
+                 (verb, (0,), (0,), (),   ()  )]
         return self.sample_from_graph(nodes, **kwargs)
     
     def sample_from_vo(self, verb, obj, **kwargs):
@@ -493,9 +603,8 @@ class SemFuncModel():
         :param obj: object predicate index
         :return: a generator of entity vectors (as matrices)
         """
-        nodes = []
-        nodes.append((verb, (1,), (1,), (), ()))
-        nodes.append((obj, (), (), (1,), (0,)))
+        nodes = [(verb, (1,), (1,), (),   ()  ),
+                 (obj,  (),   (),   (1,), (0,))]
         return self.sample_from_graph(nodes, **kwargs)
     
     def mean_sample_from_pred(self, pred, **kwargs):
@@ -508,36 +617,76 @@ class SemFuncModel():
         samples = self.sample_from_pred(pred, **kwargs)
         return sum(samples) / len(samples)
     
-    def cosine_of_samples(self, pred1, pred2, **kwargs):
+    def sample_background_graph(self, nodes, samples=100, burnin=500, interval=50, keep=None):
         """
-        Calculate the average cosine distance (1 - normalised dot product)
-        between sampled entity vectors conditioned on a pair of predicates
-        :param pred1: a predicate
-        :param pred2: a predicate
-        :param **kwargs: sampling options
-        :return: the cosine distance
+        Sample entity vectors from an unlexicalised graph
+        :param nodes: a list of nodes of the form (out_labs, out_ids, in_labs, in_ids), indexed by position in the list
+        :param samples: (default 100) number of samples to average over
+        :param burnin: (default 500) number of samples to skip before averaging starts
+        :param interval: (default 50) number of samples to take between those used in the average
+        :param keep: array or list of which nodes' vectors should be returned (default everything)
+        :return: a generator of entity vectors (as matrices)
         """
-        # As dot products are distributive over addition, and all samples have the same length,
-        # we can take the dot product of the sums
-        mean1 = self.mean_sample_from_pred(pred1, **kwargs)
-        mean2 = self.mean_sample_from_pred(pred2, **kwargs)
-        return cosine(mean1, mean2)
+        # Initialise
+        N = len(nodes)
+        ents = zeros((N, self.D))
+        
+        # Change indices to vectors
+        nodes = [list(n) for n in nodes]
+        for n in nodes:
+            n[1] = [ents[i] for i in n[1]]
+            n[3] = [ents[i] for i in n[3]]
+        
+        # Sample
+        for _ in range(burnin - interval):
+            for i, n in enumerate(nodes):
+                ents[i] = self.resample_background(*n)
+        for _ in range(samples):
+            for _ in range(interval):
+                for i, n in enumerate(nodes):
+                    ents[i] = self.resample_background(*n)
+            if keep:
+                yield ents[keep].copy()
+            else:
+                yield ents.copy()
     
-    def implies(self, pred1, pred2, **kwargs):
+    def sample_background_svo(self, **kwargs):
         """
-        Calculate the probability that the truth of pred1 implies the truth of pred2
-        :param pred1: a predicate
-        :param pred2: a predicate
-        :param **kwargs: sampling options
-        :return: the probability pred1 implies pred2
+        Sample entity vectors from a background SVO graph
+        :return: a generator of entity vectors (as matrices)
         """
-        total = 0
-        ents = self.sample_from_pred(pred1, chosen=False, **kwargs)
-        n = 0
-        for v in ents:
-            total += self.prob(v, pred2)
-            n += 1
-        return total/n
+        nodes = [((),    (),    (0,), (1,)),
+                 ((0,1), (0,2), (),   ()  ),
+                 ((),    (),    (1,), (1,))]
+        return self.sample_background_graph(nodes, **kwargs)
+    
+    def sample_background_sv(self, **kwargs):
+        """
+        Sample entity vectors from a background SV graph
+        :return: a generator of entity vectors (as matrices)
+        """
+        nodes = [((),   (),   (0,), (1,)),
+                 ((0,), (0,), (),   ()  )]
+        return self.sample_background_graph(nodes, **kwargs)
+    
+    def sample_background_vo(self, **kwargs):
+        """
+        Sample entity vectors from a background VO graph
+        :return: a generator of entity vectors (as matrices)
+        """
+        nodes = [((1,), (1,), (),   ()  ),
+                 ((),   (),   (1,), (0,))]
+        return self.sample_background_graph(nodes, **kwargs)
+    
+    def pred_dist(self, ent):
+        """
+        Calculate the probability distribution over predicates, for a given entity vector
+        :param ent: entity vector
+        :return: probability distribution over predicates
+        """
+        # Unnormalised probability of generating a predis the probability of truth, multiplied by the frequency 
+        unnorm = self.prob_all(ent) * self.freq
+        return unnorm / unnorm.sum()
     
     # Util functions
     
@@ -611,76 +760,6 @@ class SemFuncModel():
             histo_bias[i] = self.get_histogram_bias(self.bias_weights[i-1], histo_bias[0, :-1])
         
         return histo, histo_bias
-    
-    def distance_matrix_from_parameters(self):
-        """
-        Find the distances between predicates, based on their parameters
-        :return: distance matrix 
-        """
-        raise NotImplementedError
-    
-    def closest_pairs(self, number, metric, **kwargs):
-        """
-        Find the closest pairs of preds 
-        :param number: how many pairs to return
-        :param metric: the metric to use to find distances; a function, or one of the strings:
-            'samples' - use cosine of samples
-            'parameters' - use cosine of parameters
-        :kwargs: will be passed to the metric, as appropriate
-        :return: the names of the closest pairs of preds
-        """
-        # Get the distance matrix
-        if metric == 'samples':
-            matrix = self.distance_matrix_from_samples(**kwargs)
-        elif metric == 'parameters':
-            matrix = self.distance_matrix_from_parameters()
-        else:
-            matrix = self.distance_matrix(metric)
-        # Ignore the diagonal and below it
-        matrix += tril(zeros_like(matrix) + inf)
-        # Find the indices of the smallest distances
-        flat_indices = matrix.argpartition(number-1, None)[:number]  # None: flatten array
-        indices = unravel_index(flat_indices, matrix.shape)  # a tuple of arrays
-        values = matrix[indices]
-        ind_of_val = values.argsort()[::-1]
-        ind_tuples = list(zip(*indices))
-        sorted_tuples = [ind_tuples[i] for i in ind_of_val]
-        # Return these as preds
-        preds = [(self.pred_name[i], self.pred_name[j]) for i,j in sorted_tuples]
-        return preds
-    
-    def dot_product_of_samples(self, pred1, pred2, **kwargs):
-        """
-        Get the dot products of samples between two predicates
-        :param pred1: a predicate index
-        :param pred2: another predicate index
-        :param **kwargs: sampling options
-        """
-        pred1_samples = array(list(self.sample_from_pred(pred1, **kwargs)), dtype=float)
-        pred2_samples = array(list(self.sample_from_pred(pred2, **kwargs)), dtype=float)
-        return tensordot(pred1_samples, pred2_samples, (1,1)) / self.C
-    
-    def probability_of_match(self, pred1, pred2, threshold, **kwargs):
-        """
-        Find the probability that entities conditioned on two predicates are very similar
-        :param pred1: a predicate index
-        :param pred2: another predicate index
-        :param threshold: the similarity threshold (from 0 to 1)
-        :param **kwargs: sampling options
-        """
-        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
-        above = (dots > threshold).sum()
-        return above / dots.size
-    
-    def mean_sd_dot(self, pred1, pred2, **kwargs):
-        """
-        Get the mean and standard deviation of the dot products of samples between two predicates
-        :param pred1: a predicate index
-        :param pred2: another predicate index
-        :param **kwargs: sampling options
-        """
-        dots = self.dot_product_of_samples(pred1, pred2, **kwargs)
-        return dots.mean(), dots.std()
 
 
 class SemFuncModel_IndependentPreds(SemFuncModel):
@@ -794,6 +873,14 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :return: a probability
         """
         return expit(dot(ent, self.pred_wei[pred]) - self.pred_bias[pred])
+    
+    def prob_all(self, ent):
+        """
+        Calculate the probabilities of all predicates being true of an entity
+        :param ent: an entity vector
+        :return: a probability for each predicate
+        """
+        return expit(dot(self.pred_wei, ent) - self.pred_bias)
     
     def calc_av_pred(self):
         """
