@@ -150,6 +150,8 @@ if __name__ == "__main__":
     parser.add_argument('-ent_burnin', type=int, default=10)
     parser.add_argument('-pred_burnin', type=int, default=2)
     parser.add_argument('-seed', type=int, default=0)
+    parser.add_argument('-timeout', type=int, default=0)
+    parser.add_argument('-validation', nargs='+', default=[])
     
     args = parser.parse_args()
     arg_dict = dict(args._get_kwargs())
@@ -159,5 +161,5 @@ if __name__ == "__main__":
     print("Set up complete, beginning training...")
     sys.stdout.flush()
     
-    trainer.start()
+    trainer.start(timeout=args.timeout, validation=[x+'.pkl' for x in args.validation])
     

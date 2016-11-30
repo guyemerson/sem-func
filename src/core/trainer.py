@@ -243,7 +243,7 @@ class Trainer():
                              minibatch = self.minibatch)
         self.completed_files.append(fname)
         
-    def start(self, timeout=None):
+    def start(self, timeout=None, validation=None):
         """
         Begin training
         :param timeout: max number of hours to spend
@@ -252,8 +252,11 @@ class Trainer():
         self.setup.start_update_workers()        
         
         # Files to be trained on
-        file_names = os.listdir(self.data_dir)
-        file_names = list(set(file_names) - set(self.completed_files))
+        file_name_set = set(os.listdir(self.data_dir))
+        file_name_set -= set(self.completed_files)
+        if validation:
+            file_name_set -= set(validation)
+        file_names = list(file_name_set)
         shuffle(file_names)
         print('{} files to process'.format(len(file_names)))
         
