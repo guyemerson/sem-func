@@ -90,3 +90,12 @@ def sparse_like(matrix, num_rows):
     shape = list(matrix.shape)
     shape[0] = num_rows
     return SparseRows(shape)
+
+def product(iterable):
+    """
+    Calculate the product of the elements of an iterable
+    """
+    res = 1
+    for x in iterable:
+        res *= x
+    return res
