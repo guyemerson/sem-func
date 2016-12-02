@@ -688,6 +688,52 @@ class SemFuncModel():
         unnorm = self.prob_all(ent) * self.freq
         return unnorm / unnorm.sum()
     
+    def sample_pred(self, ent):
+        """
+        Sample a predicate from an entity vector
+        :param ent: entity vector
+        :return: predicate index
+        """
+        return random.choice(self.V, p=self.pred_dist(ent))
+    
+    def generate_from_graph(self, nodes, **kwargs):
+        """
+        Generate predicates from an unlexicalised graph
+        :param nodes: a list of nodes of the form (out_labs, out_ids, in_labs, in_ids), indexed by position in the list
+        :return: a generator of predicates (as numpy arrays)
+        """
+        for ents in self.sample_background_graph(nodes, **kwargs):
+            preds = [self.sample_pred(e) for e in ents]
+            yield array(preds) 
+    
+    def generate_svo(self, **kwargs):
+        """
+        Generate predicates from a background SVO graph
+        :return: a generator of predicates (as numpy arrays)
+        """
+        nodes = [((),    (),    (0,), (1,)),
+                 ((0,1), (0,2), (),   ()  ),
+                 ((),    (),    (1,), (1,))]
+        return self.generate_from_graph(nodes, **kwargs)
+    
+    def generate_sv(self, **kwargs):
+        """
+        Generate predicatess from a background SV graph
+        :return: a generator of predicates (as numpy arrays)
+        """
+        nodes = [((),   (),   (0,), (1,)),
+                 ((0,), (0,), (),   ()  )]
+        return self.generate_from_graph(nodes, **kwargs)
+    
+    def generate_vo(self, **kwargs):
+        """
+        Generate predicates from a background VO graph
+        :return: a generator of predicates (as numpy arrays)
+        """
+        nodes = [((1,), (1,), (),   ()  ),
+                 ((),   (),   (1,), (0,))]
+        return self.generate_from_graph(nodes, **kwargs)
+    
     # Util functions
     
     def init_vec_from_pred(self, pred, low=0.01, high=0.8):
