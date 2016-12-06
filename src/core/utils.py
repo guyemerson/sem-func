@@ -99,3 +99,65 @@ def product(iterable):
     for x in iterable:
         res *= x
     return res
+
+# The alias method samples from a categorical distribution in O(1) time
+# https://en.wikipedia.org/wiki/Alias_method
+
+def init_alias(prob):
+    """
+    Initialise arrays for sampling with the alias method
+    :param prob: probability array
+    :return: probability table, alias table
+    """
+    N = prob.size
+    # Initialise tables
+    U = prob.astype('float64') / prob.sum() * N
+    K = np.arange(N)
+    # Initialise lists with weight above and below 1
+    below = [i for i,x in enumerate(U) if x<1]
+    above = [i for i,x in enumerate(U) if x>=1]
+    # Fill tables
+    # In each iteration, we remove one index from the pair of lists
+    while above and below:
+        # Take a pair of indices, one above and one below
+        i = below.pop()
+        j = above.pop()
+        # Fill in the tables
+        K[i] = j
+        # Calculate the remaining weight of j, and put it back in the correct list
+        U[j] -= (1 - U[i])
+        if U[j] < 1:
+            below.append(j)
+        else:
+            above.append(j)
+    # Note the final index will have U=1, up to rounding error
+    return U, K
+
+def alias_sample_one(U, K):
+    """
+    Sample from a categorical distribution, using the alias method
+    :param U: probability table
+    :param K: alias table
+    :return: sample
+    """
+    # Choose a random index
+    i = np.random.randint(U.size)
+    # Return the index, or the alias
+    if np.random.rand() > U[i]:
+        return K[i]
+    else:
+        return i
+
+def alias_sample(U, K, n):
+    """
+    Sample from a categorical distribution, using the alias method
+    :param U: probability table
+    :param K: alias table
+    :param n: number of samples to draw
+    :return: array of samples
+    """
+    # Choose random indices
+    i = np.random.randint(U.size, size=n)
+    # Choose whether to return indices or aliases
+    switch = (np.random.rand(n) > U[i])
+    return switch * K[i] + np.invert(switch) * i
