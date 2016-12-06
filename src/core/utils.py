@@ -148,16 +148,19 @@ def alias_sample_one(U, K):
     else:
         return i
 
-def alias_sample(U, K, n):
+def alias_sample(U, K, n=None):
     """
     Sample from a categorical distribution, using the alias method
     :param U: probability table
     :param K: alias table
-    :param n: number of samples to draw
+    :param n: number of samples to draw (int or tuple of ints)
     :return: array of samples
     """
-    # Choose random indices
-    i = np.random.randint(U.size, size=n)
-    # Choose whether to return indices or aliases
-    switch = (np.random.rand(n) > U[i])
-    return switch * K[i] + np.invert(switch) * i
+    if n:
+        # Choose random indices
+        i = np.random.randint(U.size, size=n)
+        # Choose whether to return indices or aliases
+        switch = (np.random.random(n) > U[i])
+        return switch * K[i] + np.invert(switch) * i
+    else:
+        return alias_sample_one(U, K)

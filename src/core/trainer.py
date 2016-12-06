@@ -4,11 +4,10 @@ from copy import copy
 from multiprocessing import Pool, Manager, TimeoutError
 from time import sleep, time
 from random import shuffle
-from __config__.filepath import DATA_DIR, AUX_DIR, INIT_DIR, OUT_DIR, VOCAB_FILE, FREQ_FILE
 
 from trainingsetup import TrainingSetup
 from utils import sub_namespace, sub_dict
-from _warnings import warn
+from __config__.filepath import DATA_DIR, INIT_DIR
 
 def create_particle(p_full, p_agent, p_patient):
     """
@@ -72,7 +71,7 @@ class DataInterface():
         :param ent_burnin: number of update steps to take for latent entities
         :param pred_burnin: number of update steps to take for negative preds
         """
-        # Dicts for graphs, nodes, and pred frequencies
+        # Dict for nodes
         self.nodes = data
         self.N = len(self.nodes)
         # Optionally, check that nodeids are increasing integers
@@ -86,7 +85,7 @@ class DataInterface():
         for _ in range(ent_burnin):
             self.setup.resample_conditional_batch(self.nodes, self.ents)
         # Negative pred samples
-        self.neg_preds = random.choice(self.model.pred_tokens, (self.N, self.NEG))
+        self.neg_preds = self.model.propose_pred((self.N, self.NEG))
         for _ in range(pred_burnin):
             self.setup.resample_pred_batch(self.nodes, self.ents, self.neg_preds)
     
@@ -330,24 +329,21 @@ class Trainer():
         Save trained model to disk
         """
         with open(self.output_name+'.pkl', 'wb') as f:
-            # Remove things that weren't trained
+            # Shallow copy of the setup
             crucial = copy(self.setup)
-            crucial.model = copy(crucial.model)
-            crucial.model.pred_tokens = os.path.join(FREQ_FILE)
-            crucial.model.freq = os.path.join(FREQ_FILE)
-            crucial.model.pred_name = os.path.join(VOCAB_FILE)
             # Remove queues (which can't be pickled)
             crucial.link_update_queues = [q.qsize() for q in crucial.link_update_queues]
             crucial.pred_update_queues = [q.qsize() for q in crucial.pred_update_queues]
             # Save the file!
             pickle.dump(crucial, f)
         with open(self.output_name+'.aux.pkl', 'wb') as f:
+            # Save the aux info, and the list of completed files
             actual_info = copy(self.aux_info)
             actual_info['completed_files'] = self.completed_files._getvalue()
             pickle.dump(actual_info, f)
     
     @staticmethod
-    def load(fname, directory=INIT_DIR, data_dir=os.path.join(DATA_DIR,'core-5-nodes'), output_name=None, output_dir=None):
+    def load(fname, directory=INIT_DIR, data_dir=None, output_name=None, output_dir=None):
         """
         Load trained model from disk
         """
@@ -358,11 +354,15 @@ class Trainer():
             while os.path.exists(os.path.join(output_dir, output_name)+'.pkl'):
                 output_name += '_ctd'
         
-        setup, aux_info = TrainingSetup.load(fname, directory, with_tokens=True)
+        setup, aux_info = TrainingSetup.load(fname, directory)
         
         interface = DataInterface(setup, (),
                                   **sub_dict(aux_info, ['particle',
                                                         'neg_samples']))
+        
+        if data_dir is None:
+            stem = '-'.join(fname.split('-', maxsplit=2)[:2])
+            data_dir = os.path.join(DATA_DIR,'{}-nodes'.format(stem))
         
         trainer = Trainer(interface,
                           data_dir = data_dir,

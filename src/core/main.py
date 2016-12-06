@@ -54,7 +54,8 @@ def setup_trainer(**kw):
                                  "init_link_str",
                                  "init_verb_prop",
                                  "init_pat_prop",
-                                 "init_ag_prop"])
+                                 "init_ag_prop",
+                                 "freq_alpha"])
     if kw['model'] == 'independent':
         model_class = SemFuncModel_IndependentPreds
     elif kw['model'] == 'factorised':
@@ -125,6 +126,7 @@ if __name__ == "__main__":
     parser.add_argument('-init_verb_prop', type=float, default=0.5)
     parser.add_argument('-init_pat_prop', type=float, default=0.6)
     parser.add_argument('-init_ag_prop', type=float, default=0.6)
+    parser.add_argument('-freq_alpha', type=float, default=0.75)
     # Training setup parameters
     parser.add_argument('-setup', type=str, default='adagrad')
     parser.add_argument('-rate', type=float, default=0.01)

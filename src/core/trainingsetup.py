@@ -1,8 +1,8 @@
 import pickle, os
-from numpy import zeros, zeros_like, array, sqrt
+from numpy import zeros, zeros_like, sqrt
 from multiprocessing import Manager, Process
 
-from __config__.filepath import INIT_DIR, AUX_DIR
+from __config__.filepath import INIT_DIR
 from utils import make_shared, sparse_like, shared_zeros_like
 
 class TrainingSetup():
@@ -240,23 +240,12 @@ class TrainingSetup():
     # Loading from file
     
     @staticmethod
-    def load(fname, directory=INIT_DIR, with_tokens=False, with_workers=False):
+    def load(fname, directory=INIT_DIR, with_workers=False):
         """
         Load a TrainingSetup instance from a file
         """
         with open(os.path.join(directory, fname)+'.pkl', 'rb') as f:
             setup = pickle.load(f)
-        
-        # Load untrained data about preds
-        if isinstance(setup.model.pred_name, str):
-            with open(os.path.join(AUX_DIR, setup.model.pred_name), 'rb') as f:
-                setup.model.pred_name = pickle.load(f)
-        if isinstance(setup.model.freq, str):
-            with open(os.path.join(AUX_DIR, setup.model.freq), 'rb') as f:
-                freq = pickle.load(f)
-            setup.model.freq = array(freq) / sum(freq)
-            if with_tokens:
-                setup.model.get_pred_tokens(freq)
         
         # Make weights shared
         setup.make_shared()

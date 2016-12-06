@@ -5,7 +5,7 @@ from scipy.spatial.distance import cosine
 from scipy.special import expit
 from warnings import warn
 
-from utils import make_shared, shared_zeros, is_verb
+from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample
 
 
 class SemFuncModel():
@@ -14,16 +14,6 @@ class SemFuncModel():
     """
     def __init__(self, *args, **kwargs):
         raise NotImplementedError
-    
-    def get_pred_tokens(self, freq):
-        """
-        Initialise a shared array of predicate tokens
-        """
-        self.pred_tokens = shared_zeros((freq.sum(),), 'l', 'int64')
-        i = 0
-        for p, f in enumerate(freq):  # The original ints, not the normalised values
-            self.pred_tokens[i:i+f] = p
-            i += f
     
     # Semantic functions
     
@@ -252,6 +242,13 @@ class SemFuncModel():
         """
         raise NotImplementedError
     
+    def propose_pred(self, shape=None):
+        """
+        Generate a random predicate
+        (or an array of predicates, if shape is given)
+        """
+        return alias_sample(self.freq_U, self.freq_K, shape)
+    
     def resample_pred(self, vector, old_pred):
         """
         Resample a predicate from an entity vector,
@@ -261,7 +258,7 @@ class SemFuncModel():
         :return: the resampled predicate
         """
         # Propose new predicate
-        new_pred = random.choice(self.pred_tokens)
+        new_pred = self.propose_pred()
         # Metropolis-Hastings ratio
         ratio = self.freq[new_pred] * self.prob(vector, new_pred) \
               /(self.freq[old_pred] * self.prob(vector, old_pred))
@@ -812,7 +809,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
     """
     SemFuncModel with independent parameters for each predicate
     """
-    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0, init_ent_bias=None, init_link_str=0, init_verb_prop=0.5, init_pat_prop=0.6, init_ag_prop=0.6, verbose=True):
+    def __init__(self, preds, links, freq, dims, card, init_bias=0, init_card=None, init_range=0, init_ent_bias=None, init_link_str=0, init_verb_prop=0.5, init_pat_prop=0.6, init_ag_prop=0.6, freq_alpha=0.75, verbose=True):
         """
         Initialise the model
         :param preds: names of predicates
@@ -823,6 +820,12 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         :param init_bias: (optional) initial bias for calculating semantic function values
         :param init_card: (optional) approximate cardinality for initialising pred weights
         :param init_range: (optional) range for initialising pred weights
+        :param init_ent_bias: (optional) initial bias for entity components
+        :param init_link_str: (optional) initial bias for links, setting some dimensions for verbs, agents, patients
+        :param init_verb_prop: (default 0.5) proportion of dimensions to use for verbs
+        :param init_pat_prop: (default 0.6) proportion of noun dimensions to use for patients
+        :param init_ag_prop: (default 0.6) proportion of noun dimensions to use for agents
+        :param freq_alpha: (default 0.75) exponent to raise frequencies to the power of
         :param verbose: (default True) whether to print messages
         """
         self.verbose = verbose
@@ -834,9 +837,12 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.link_name = links
         
         # Fixed parameters
-        self.freq = make_shared(freq) / freq.sum()
         if len(freq) != len(preds):
             raise ValueError('Number of predicate frequencies must match number of predicates')
+        self.freq_alpha = freq_alpha
+        self.freq = freq ** freq_alpha
+        self.freq /= self.freq.sum()
+        self.freq_U, self.freq_K = init_alias(freq)
         
         # Constants
         self.D = dims
@@ -877,7 +883,6 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         
         # For sampling:
         self.calc_av_pred()  # average predicate
-        self.get_pred_tokens(freq)  # pred tokens, for sampling preds
         
         # Package for training setup
         self.collect()
@@ -886,7 +891,6 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         """
         Convert to shared memory
         """
-        self.freq = make_shared(self.freq)
         self.link_wei = make_shared(self.link_wei)
         self.ent_bias = make_shared(self.ent_bias)
         self.pred_wei = make_shared(self.pred_wei)
