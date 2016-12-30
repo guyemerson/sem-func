@@ -223,7 +223,7 @@ class SemFuncModel():
         if chosen:
             # Finally, weighted number of other predicates that are true:
             # (Use an approximation, rather than summing over all predicates...)
-            negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])  #!# extra param
+            negenergy += 0.5 * (self.av_pred[old_i] - self.av_pred[new_i])  # TODO control extra param
         
         ratio *= exp(negenergy)  # TODO deal with overflow errors
         
@@ -242,6 +242,8 @@ class SemFuncModel():
         Recalculate the average predicate
         (used as an approximation in conditional sampling)
         """
+        # TODO make this a shared array
+        # (which also requires updating it with a separate process)
         raise NotImplementedError
     
     def propose_pred(self, shape=None):
@@ -517,7 +519,7 @@ class SemFuncModel():
         :return: a generator of entity vectors
         """
         if init == 'old':
-            v = self.init_vec_from_pred(pred)  #!# Not currently controlling high and low limits
+            v = self.init_vec_from_pred(pred)  # TODO control high and low limits
         elif init == 'max':
             v = self.max_vec_from_pred(pred)
         else:
@@ -1193,30 +1195,3 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
             indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
             res.append(indices)
         return res
-    
-
-# Converting pydmrs data to form required by SemFuncModel
-
-def reform_links(self, node, ents):
-    """
-    Get the links from a PointerNode,
-    and convert them to the form required by SemFuncModel
-    :param node: a PointerNode
-    :param ents: a matrix of entity vectors (indexed by nodeid)
-    """
-    out_labs = [l.rargname for l in node.get_out(itr=True)]
-    out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
-    in_labs = [l.rargname for l in node.get_in(itr=True)]
-    in_vecs = [ents[l.start] for l in node.get_in(itr=True)]
-    return out_labs, out_vecs, in_labs, in_vecs
-
-def reform_out_links(self, node, ents):
-    """
-    Get the outgoing links from a PointerNode,
-    and convert them to the form required by SemFuncModel
-    :param node: a PointerNode
-    :param ents: a matrix of entity vectors (indexed by nodeid)
-    """
-    out_labs = [l.rargname for l in node.get_out(itr=True)]
-    out_vecs = [ents[l.end] for l in node.get_out(itr=True)]
-    return out_labs, out_vecs

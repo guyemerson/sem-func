@@ -1,6 +1,8 @@
 from multiprocessing import Array
 import numpy as np
 
+# Shared numpy arrays
+
 def make_shared(array):
     """
     Convert a numpy array to a multiprocessing array with numpy access
@@ -39,11 +41,51 @@ def shared_zeros_like(array):
     # Initialise the array
     return shared_zeros(array.shape, ctype, dtype)
 
-def is_verb(string):
+# Row-sparse matrices
+
+class SparseRows():
     """
-    Check if a predstring is for a verb or a noun
+    Sparse rows
     """
-    return string.split('_')[-2] == 'v'
+    __slots__ = ('indices', 'array', 'next')
+    
+    def __init__(self, shape):
+        """
+        Initialise a sparse numpy array with a given shape
+        :param shape: tuple of integers, where the first index is the number of *non-zero* rows
+        """
+        self.indices = np.empty(shape[0], dtype='int')
+        self.array = np.empty(shape)
+        self.next = 0
+    
+    def __setitem__(self, key, value):
+        """
+        Set the value of the next non-zero row
+        :param key: index of the row
+        :param value: value of the row
+        """
+        self.indices[self.next] = key
+        self.array[self.next] = value
+        self.next += 1 
+    
+    def add_to(self, other):
+        """
+        Add this array to a non-sparse array 
+        :param other: numpy array
+        """
+        if self.next != self.indices.shape[0]:
+            raise Exception('SparseRows object has not been filled')
+        other[self.indices] += self.array
+
+def sparse_like(matrix, num_rows):
+    """
+    Create a SparseRows object based on a matrix, with a specified number of rows
+    """
+    shape = list(matrix.shape)
+    shape[0] = num_rows
+    return SparseRows(shape)
+
+# Getting subparts
 
 def sub_namespace(namespace, attrs, strict=False):
     """
@@ -63,33 +105,13 @@ def sub_dict(dictionary, keys, strict=False):
     else:
         return {x:dictionary[x] for x in keys if x in dictionary}
 
-class SparseRows():
-    """
-    Sparse rows
-    """
-    __slots__ = ('indices', 'array', 'next')
-    
-    def __init__(self, shape):
-        self.indices = np.empty(shape[0], dtype='int')
-        self.array = np.empty(shape)
-        self.next = 0
-    
-    def __setitem__(self, key, value):
-        self.indices[self.next] = key
-        self.array[self.next] = value
-        self.next += 1 
-    
-    def add_to(self, other):
-        assert self.next == self.indices.shape[0]
-        other[self.indices] += self.array
+# Miscellaneous
 
-def sparse_like(matrix, num_rows):
+def is_verb(string):
     """
-    Create a SparseRows object based on a matrix, with a specified number of rows
+    Check if a predstring is for a verb or a noun
     """
-    shape = list(matrix.shape)
-    shape[0] = num_rows
-    return SparseRows(shape)
+    return string.split('_')[-2] == 'v'
 
 def product(iterable):
     """
@@ -164,3 +186,38 @@ def alias_sample(U, K, n=None):
         return switch * K[i] + np.invert(switch) * i
     else:
         return alias_sample_one(U, K)
+
+# Converting pydmrs data to form required by SemFuncModel
+
+def reform_links(self, node, ents):
+    """
+    Get the links from a PointerNode,
+    and convert them to the form required by SemFuncModel
+    :param node: a PointerNode
+    :param ents: a matrix of entity vectors (indexed by nodeid)
+    """
+    out_labs = []
+    out_vecs = []
+    in_labs = []
+    in_vecs = []
+    for l in node.get_out(itr=True):
+        out_labs.append(l.rargname)
+        out_vecs.append(ents[l.end])
+    for l in node.get_in(itr=True):
+        in_labs.append(l.rargname)
+        in_vecs.append(ents[l.start])
+    return out_labs, out_vecs, in_labs, in_vecs
+
+def reform_out_links(self, node, ents):
+    """
+    Get the outgoing links from a PointerNode,
+    and convert them to the form required by SemFuncModel
+    :param node: a PointerNode
+    :param ents: a matrix of entity vectors (indexed by nodeid)
+    """
+    out_labs = []
+    out_vecs = []
+    for l in node.get_out(itr=True):
+        out_labs.append(l.rargname)
+        out_vecs.append(ents[l.end])
+    return out_labs, out_vecs

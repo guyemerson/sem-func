@@ -242,10 +242,12 @@ class Trainer():
                              minibatch = self.minibatch)
         self.completed_files.append(fname)
         
-    def start(self, timeout=None, validation=None):
+    def start(self, timeout=None, validation=None, maxtasksperchild=None):
         """
         Begin training
         :param timeout: max number of hours to spend
+        :param validation: filenames to ignore
+        :param maxtasksperchild: max number of files each worker should process before being restarted
         """
         # Workers to update the shared weights from queued gradients
         self.setup.start_update_workers()        
@@ -260,7 +262,7 @@ class Trainer():
         print('{} files to process'.format(len(file_names)))
         
         # Process the files with a pool of worker processes
-        with Pool(self.processes, self.init) as p:  
+        with Pool(self.processes, self.init, maxtasksperchild=maxtasksperchild) as p:  
             self.training = True
             self.error = None
             initial_time = time()
@@ -291,19 +293,23 @@ class Trainer():
     # Callbacks for Pool.map_async
     # These just set attributes, which will be checked once the instance stops sleeping
     def callback(self, _):
+        """Callback for pool of workers, once training is complete"""
         self.training = False
     def error_callback(self, e):
+        """Callback for pool of workers, if a worker throws an error"""
         self.error = e
     
     # Initialise each worker with the instance's train_on_file method (as a global variable),
     # so that it is not pickled and piped with each file
     def init(self):
+        """Initialisation function for workers, to set up the model and training environment"""
         global train_on_file
         train_on_file = self.train_on_file
     # The train_on_file function will be available in each worker
     # This is a static method so that it can be pickled - from Python 3.5, see https://bugs.python.org/issue23611
     @staticmethod
     def work(fname):
+        """Job function for workers, to apply to each file"""
         train_on_file(fname)
         # TODO - sometimes one worker hangs...
     

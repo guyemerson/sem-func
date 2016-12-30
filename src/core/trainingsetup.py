@@ -33,12 +33,12 @@ class TrainingSetup():
         self.rate_link = rate / sqrt(rate_ratio)
         self.rate_pred = rate * sqrt(rate_ratio)
         # Regularisation
-        self.L2_link = 2 * l2 / sqrt(l2_ratio)
+        self.L2_link = 2 * l2 / sqrt(l2_ratio)  # TODO make regularisation strength a list, like the weights (and change 'descend' functions appropriately)
         self.L2_pred = 2 * l2 * sqrt(l2_ratio)
         self.L1_link = l1 / sqrt(l1_ratio)
         self.L1_pred = l1 * sqrt(l1_ratio)
         self.L1_ent = l1_ent
-        self.L2_ent = l2_ent
+        self.L2_ent = 2 * l2_ent
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps

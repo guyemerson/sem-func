@@ -25,7 +25,7 @@ def setup_trainer(**kw):
     # Save under OUTPUT.pkl and OUTPUT.aux.pkl
     
     # Check the output path is clear
-    if os.path.exists(OUTPUT+'.pkl'):
+    if not kw['overwrite'] and os.path.exists(OUTPUT+'.pkl'):
         raise Exception('File already exists')
     
     # Load vocab for model
@@ -113,6 +113,7 @@ if __name__ == "__main__":
     # Output and input
     parser.add_argument('suffix', nargs='?', default=None)
     parser.add_argument('-thresh', type=int, default=10000)
+    parser.add_argument('-overwrite', action='store_true')
     # Model hyperparameters
     parser.add_argument('-model', type=str, default='independent')
     parser.add_argument('-dims', type=int, default=40)
@@ -154,6 +155,7 @@ if __name__ == "__main__":
     parser.add_argument('-seed', type=int, default=0)
     parser.add_argument('-timeout', type=int, default=0)
     parser.add_argument('-validation', nargs='+', default=[])
+    parser.add_argument('-maxtasksperchild', type=int, default=None)
     
     args = parser.parse_args()
     arg_dict = dict(args._get_kwargs())
@@ -163,5 +165,5 @@ if __name__ == "__main__":
     print("Set up complete, beginning training...")
     sys.stdout.flush()
     
-    trainer.start(timeout=args.timeout, validation=[x+'.pkl' for x in args.validation])
+    trainer.start(timeout=args.timeout, validation=[x+'.pkl' for x in args.validation], maxtasksperchild=args.maxtasksperchild)
     
