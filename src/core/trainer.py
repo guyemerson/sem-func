@@ -36,11 +36,10 @@ class DataInterface():
     """
     A semantic function model with a training regime and data
     """
-    def __init__(self, setup, data, particle, neg_samples, ent_burnin=0, pred_burnin=0):
+    def __init__(self, setup, particle, neg_samples, ent_burnin=0, pred_burnin=0):
         """
         Initialise the data interface
         :param setup: semantic function model with training setup
-        :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
         :param particle: fantasy particle of the form (nodeid, out_labs, out_ids, in_labs, in_ids), with increasing nodeids 
         :param neg_samples: number of negative pred samples to draw for each node
         :param ent_burnin: (default 0) number of update steps to take for latent entities
@@ -53,7 +52,6 @@ class DataInterface():
         self.NEG = neg_samples
         # Data
         self.filename = None
-        self.load_data(data, ent_burnin, pred_burnin)
         # Fantasy particles
         self.neg_nodes = particle
         self.neg_link_counts = zeros(self.model.L)
@@ -64,14 +62,14 @@ class DataInterface():
         self.K = len(self.neg_nodes)
         self.neg_ents = random.binomial(1, self.model.C/self.model.D, (self.K, self.model.D))
     
-    def load_data(self, data, ent_burnin, pred_burnin, check=False):
+    def load_data(self, data, ent_burnin=0, pred_burnin=0, check=False):
         """
         Load data from a list
         :param data: observed data of the form (nodeid, pred, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
         :param ent_burnin: number of update steps to take for latent entities
         :param pred_burnin: number of update steps to take for negative preds
         """
-        # Dict for nodes
+        # List of nodes
         self.nodes = data
         self.N = len(self.nodes)
         # Optionally, check that nodeids are increasing integers
@@ -89,7 +87,7 @@ class DataInterface():
         for _ in range(pred_burnin):
             self.setup.resample_pred_batch(self.nodes, self.ents, self.neg_preds)
     
-    def load_file(self, filehandle, ent_burnin, pred_burnin):
+    def load_file(self, filehandle, ent_burnin=0, pred_burnin=0):
         """
         Load data from a file
         :param filehandle: pickled data
@@ -184,6 +182,40 @@ class DataInterface():
                 if dump_file:
                     with open(dump_file, 'wb') as f:
                         pickle.dump(self.setup, f)
+
+class MultiPredDataInterface(DataInterface):
+    """
+    Data interface that allows multiple preds for the same node
+    """
+    def load_data(self, data, ent_burnin=0, pred_burnin=0, check=False):
+        """
+        Load data from a list
+        :param data: observed data of the form (nodeid, preds, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
+        :param ent_burnin: number of update steps to take for latent entities
+        :param pred_burnin: number of update steps to take for negative preds
+        """
+        # List of nodes
+        self.nodes = data
+        self.N = len(self.nodes)
+        # Optionally, check that nodeids are increasing integers
+        if check:
+            for i, n in enumerate(self.nodes): assert i == n[0]
+        # Latent entities
+        self.ents = empty((self.N, self.model.D))
+        for i, n in enumerate(self.nodes):
+            # TODO use max vec?
+            self.ents[i] = self.model.init_vec_from_pred(n[1])  #!# Not currently controlling high and low limits
+        for _ in range(ent_burnin):
+            self.setup.resample_conditional_batch(self.nodes, self.ents)
+        # Negative pred samples
+        self.neg_preds = self.model.propose_pred((self.N, self.NEG))
+        for _ in range(pred_burnin):
+            self.setup.resample_pred_batch(self.nodes, self.ents, self.neg_preds)
+        
+        # There are two options here:
+        # 1. Multiply the neg pred gradients by the number of positive preds
+        # 2. Sample extra negative preds
+
 
 class Trainer():
     """
