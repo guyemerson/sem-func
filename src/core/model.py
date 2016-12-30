@@ -1,11 +1,11 @@
 from math import exp, log
-from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition, flatnonzero
+from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition, flatnonzero, integer
 from numpy.linalg import norm
 from scipy.spatial.distance import cosine
 from scipy.special import expit
 from warnings import warn
 
-from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample
+from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product
 
 
 class SemFuncModel():
@@ -1195,3 +1195,14 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
             indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
             res.append(indices)
         return res
+
+
+class MultiPredMixin(SemFuncModel):
+    """
+    Allow calculations based on multiple preds
+    """
+    def prob(self, ent, pred):
+        if isinstance(pred, (int, integer)):
+            return super().prob(ent, pred)
+        else:
+            return product(super().prob(ent, p) for p in pred)

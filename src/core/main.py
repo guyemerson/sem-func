@@ -89,7 +89,7 @@ def setup_trainer(**kw):
     
     # Set up training (without data)
     particle = create_particle(3,2,5)
-    interface = DataInterface(setup, (),
+    interface = DataInterface(setup,
                               particle,
                               neg_samples = kw['neg_samples'])
     
