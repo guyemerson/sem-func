@@ -90,14 +90,16 @@ class SemFuncModel():
         :return: cardinality probabilities for successive subsets of components
         """
         intermed = zeros((self.D-1, self.C+1))
+        # intermed[i,j] is the probability, ignoring the cardinality potential,
+        # that the units from 0 to i have total cardinality j 
         intermed[0,0] = 1-prob[0]
         intermed[0,1] = prob[0]
-        # Note! This loop is a bottleneck, because it's done in Python rather than NumPy.
+        # TODO This loop is a bottleneck, because it's done in Python rather than NumPy or C.
         # (We call this function often enough that it matters)
-        # It would be faster for this loop to be done in C...
+        # It's not easy to vectorise in NumPy, because intermed[i] depends on intermed[i-1]
         for i in range(1,self.D-1):
-            intermed[i] = intermed[i-1] * (1 - prob[i-1])
-            intermed[i,1:] += intermed[i-1,:-1] * prob[i-1]
+            intermed[i] = intermed[i-1] * (1 - prob[i])  # unit i is off
+            intermed[i,1:] += intermed[i-1,:-1] * prob[i]  # unit i is on
 
         return intermed
     
@@ -126,7 +128,7 @@ class SemFuncModel():
                     ein = p * intermed[i-1][aux-1]
                     aus = (1-p) * intermed[i-1][aux]
                     if ein == 0 and aus == 0:
-                        raise Exception('div zero!')
+                        raise Exception('div zero!')  # TODO make this cleaner
                     # Probability of being on:
                     on = ein/(ein+aus)
                     # Random sample:
@@ -519,7 +521,7 @@ class SemFuncModel():
         elif init == 'max':
             v = self.max_vec_from_pred(pred)
         else:
-            raise Exception
+            raise ValueError("init parameter must be 'max' or 'old'")
         
         for _ in range(burnin-interval):
             self.resample_conditional(v, pred, (),(),(),(), chosen=chosen)
