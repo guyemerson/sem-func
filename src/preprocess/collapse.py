@@ -79,7 +79,7 @@ def add_graph(nodes, graph):
             verb_labs.append(1)
             verb_ids.append(new_id)
             new_id += 1
-            nodes.append(output)
+        nodes.extend(output)
 
 # Convert and save
 
