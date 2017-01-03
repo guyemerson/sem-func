@@ -12,18 +12,21 @@ def setup_trainer(**kw):
     Setup a semantic function model, ready for training
     """
     # Set input and output
-    DATA = os.path.join(DATA_DIR, 'core-{}-nodes'.format(kw['thresh']))
     if kw['multipred']:
-        DATA = 'multi'+DATA
+        prefix = 'multicore'
+    else:
+        prefix = 'core'
     
-    output_template = os.path.join(OUT_DIR, 'core-{}-{}')
+    DATA = os.path.join(DATA_DIR, '{}-{}-nodes'.format(prefix, kw['thresh']))
+    
+    output_template = os.path.join(OUT_DIR, '{}-{}-{}')
     
     if kw['suffix'] is None:
         kw['suffix'] = 1
-        while os.path.exists(output_template.format(kw['thresh'], kw['suffix'])+'.pkl'):
+        while os.path.exists(output_template.format(prefix, kw['thresh'], kw['suffix'])+'.pkl'):
             kw['suffix'] += 1
     
-    OUTPUT = output_template.format(kw['thresh'], kw['suffix'])
+    OUTPUT = output_template.format(prefix, kw['thresh'], kw['suffix'])
     # Save under OUTPUT.pkl and OUTPUT.aux.pkl
     
     # Check the output path is clear
