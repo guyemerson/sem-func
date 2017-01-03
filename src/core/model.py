@@ -1294,6 +1294,36 @@ class MultiPredMixin(SemFuncModel):
         pred_grads = [sparse_like(m, total_preds) for m in self.pred_local_weights]
         pred_grads += [zeros_like(m) for m in self.pred_global_weights]
         return link_grads, pred_grads
+    
+    def init_vec_from_pred(self, pred, low=0.01, high=0.8):
+        """
+        Initialise an entity vector from a pred
+        :param pred: a predicate or list or predicates
+        :param low: (default 0.01) the minimum non-sparse probability of each component
+        :param high: (default 0.8) the maximum non-sparse probability of each component
+        :return: the vector
+        """
+        if isinstance(pred, (int, integer)):
+            return super().init_vec_from_pred(pred, low, high)
+        
+        # Multiply the weights from each pred
+        prob = self.pred_wei[pred].prod(0).clip(low, high)  # Use ent bias?  # Take expit?
+        return self.sample_card_restr(prob)
+    
+    def max_vec_from_pred(self, pred):
+        """
+        Return the most typical entity vector for a pred
+        :param pred: a predicate
+        :return: the vector
+        """
+        if isinstance(pred, (int, integer)):
+            return super().max_vec_from_pred(pred)
+        
+        vec = zeros(self.D)
+        # Sum the weights from each pred, and find the max vector for that
+        sum_pred = self.pred_wei[pred].sum(0)
+        vec[sum_pred.argpartition(-self.C)[-self.C:]] = 1
+        return vec
 
 
 class SemFuncModel_MultiIndependentPreds(MultiPredMixin, SemFuncModel_IndependentPreds):
