@@ -13,6 +13,8 @@ def setup_trainer(**kw):
     """
     # Set input and output
     DATA = os.path.join(DATA_DIR, 'core-{}-nodes'.format(kw['thresh']))
+    if kw['multipred']:
+        DATA = 'multi'+DATA
     
     output_template = os.path.join(OUT_DIR, 'core-{}-{}')
     
