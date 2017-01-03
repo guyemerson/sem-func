@@ -1231,8 +1231,10 @@ class MultiPredMixin(SemFuncModel):
         """
         if isinstance(pred, (int, integer)):
             return super().prob(ent, pred)
-        else:
-            return product(super().prob(ent, p) for p in pred)
+        
+        # Get parent function outside of comprehension
+        single_prob = super().prob
+        return product(single_prob(ent, p) for p in pred)
     
     def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices=None, pred_matrices=None, link_counts=None):
         """
