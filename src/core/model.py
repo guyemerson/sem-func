@@ -5,7 +5,7 @@ from scipy.spatial.distance import cosine
 from scipy.special import expit
 from warnings import warn
 
-from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product
+from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product, sparse_like
 
 
 class SemFuncModel():
@@ -13,6 +13,12 @@ class SemFuncModel():
     The core semantic function model, including the background distribution
     """
     def __init__(self, *args, **kwargs):
+        raise NotImplementedError
+    
+    def make_shared(self):
+        raise NotImplementedError
+    
+    def collect(self):
         raise NotImplementedError
     
     # Semantic functions
@@ -367,6 +373,7 @@ class SemFuncModel():
         # ...from the negative preds:
         
         # This currently only works if all matrices are SparseRows objects
+        # We first add one row for each neg pred, and then make the rows negative
         num_preds = neg_preds.shape[0]
         current_index = pred_matrices[0].next
         for p in neg_preds:
@@ -375,6 +382,20 @@ class SemFuncModel():
             grad.array[current_index:grad.next] /= - num_preds  # negative
         # Return gradient matrices
         return link_matrices, pred_matrices, link_counts
+    
+    def init_observe_latent_batch(self, batch, neg_preds):
+        """
+        Initialise gradient matrices for a batch of nodes
+        :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
+        :param neg_preds: a matrix of negative samples of preds
+        :return: link gradient matrices, pred gradient matrices
+        """
+        # Initialise gradient matrices
+        link_grads = [zeros_like(m) for m in self.link_weights]
+        total_preds = len(batch) * (neg_preds.shape[1] + 1)
+        pred_grads = [sparse_like(m, total_preds) for m in self.pred_local_weights]
+        pred_grads += [zeros_like(m) for m in self.pred_global_weights]
+        return link_grads, pred_grads
     
     # Testing functions
     
@@ -1020,7 +1041,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
             res.append(indices)
         return res
 
-
+'''
 class SemFuncModel_FactorisedPreds(SemFuncModel):
     """
     SemFuncModel with factorised pred parameters
@@ -1195,6 +1216,7 @@ class SemFuncModel_FactorisedPreds(SemFuncModel):
             indices = dist.argpartition(tuple(range(-1,-1-number,-1)))[-1-number:-1]
             res.append(indices)
         return res
+'''
 
 
 class MultiPredMixin(SemFuncModel):
@@ -1202,7 +1224,80 @@ class MultiPredMixin(SemFuncModel):
     Allow calculations based on multiple preds
     """
     def prob(self, ent, pred):
+        """
+        Calculate the probability that one or more predicates are true of an entity
+        :param ent: entity vector
+        :param pred: predicate index, or list of indices
+        """
         if isinstance(pred, (int, integer)):
             return super().prob(ent, pred)
         else:
             return product(super().prob(ent, p) for p in pred)
+    
+    def observe_latent(self, vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices=None, pred_matrices=None, link_counts=None):
+        """
+        Calculate multiple gradients for a node
+        :param vector: an entity vector
+        :param pred: a predicate or list of predicates
+        :param neg_preds: an iterable of predicates
+        :param out_labels: an iterable of link labels (outgoing)
+        :param out_vectors: an iterable of entity vectors (outgoing)
+        :param in_labels: an iterable of link labels (incoming)
+        :param in_vectors: an iterable of entity vectors (incoming)
+        :param link_matrices: (optional) the matrices which link gradients should be added to
+        :param pred_matrices: (optional) the matrices which pred gradients should be added to
+        :param link_counts: (optional) the vector of counts which should be added to
+        :return: link gradient matrices, pred gradient matrices, number of times links observed
+        """
+        if isinstance(pred, (int, integer)):
+            return super().observe_latent(vector, pred, neg_preds, out_labels, out_vectors, in_labels, in_vectors, link_matrices, pred_matrices, link_counts)
+        
+        # Initialise matrices if not given
+        if link_matrices is None:
+            link_matrices = [zeros_like(m) for m in self.link_weights]
+        if pred_matrices is None:
+            pred_matrices = [zeros_like(m) for m in self.pred_weights]
+        if link_counts is None:
+            link_counts = zeros(self.L)
+        # Add gradients...
+        # ...from links:
+        self.observe_links(vector, out_labels, out_vectors, in_labels, in_vectors, link_matrices, link_counts)
+        
+        # (Iterate through all preds for the node)
+        for pos_p in pred:
+            # ...from the pred:
+            self.observe_pred(vector, pos_p, pred_matrices)
+            # ...from the negative preds:
+            
+            # This currently only works if all matrices are SparseRows objects
+            # We first add one row for each neg pred, and then make the rows negative
+            num_preds = neg_preds.shape[0]
+            current_index = pred_matrices[0].next
+            for neg_p in neg_preds:
+                self.observe_pred(vector, neg_p, pred_matrices)
+            for grad in pred_matrices:
+                grad.array[current_index:grad.next] /= - num_preds  # negative
+        
+        # Return gradient matrices
+        return link_matrices, pred_matrices, link_counts
+    
+    def init_observe_latent_batch(self, batch, neg_preds):
+        """
+        Initialise gradient matrices for a batch of nodes
+        :param batch: an iterable of (nodeid, preds, out_labs, out_ids, in_labs, in_ids) tuples
+        :param neg_preds: a matrix of negative samples of preds
+        :return: link gradient matrices, pred gradient matrices
+        """
+        link_grads = [zeros_like(m) for m in self.link_weights]
+        total_pos_preds = sum(len(x[1]) for x in batch)  # Number of preds including multipred nodes
+        total_preds = total_pos_preds * (neg_preds.shape[1] + 1)
+        pred_grads = [sparse_like(m, total_preds) for m in self.pred_local_weights]
+        pred_grads += [zeros_like(m) for m in self.pred_global_weights]
+        return link_grads, pred_grads
+
+
+class SemFuncModel_MultiIndependentPreds(MultiPredMixin, SemFuncModel_IndependentPreds):
+    """
+    SemFuncModel with independent parameters for each predicate,
+    and allowing calculations based on multiple preds
+    """

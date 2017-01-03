@@ -131,13 +131,10 @@ class TrainingSetup():
         :return: link gradient matrices, pred gradient matrices
         """
         # Initialise gradient matrices
-        link_grads = [zeros_like(m) for m in self.link_weights]
-        total_preds = len(batch) * (neg_preds.shape[1] + 1)
-        pred_grads = [sparse_like(m, total_preds) for m in self.pred_local_weights]
-        pred_grads += [zeros_like(m) for m in self.pred_global_weights]
+        link_grads, pred_grads = self.model.init_observe_latent_batch(batch, neg_preds)
         link_counts = zeros(self.model.L)
+        # For each node, add gradients
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
-            # For each node, add gradients
             # Look up the vector, neg preds, and linked vectors
             vec = ents[nodeid]
             npreds = neg_preds[nodeid]
@@ -186,7 +183,7 @@ class TrainingSetup():
         :param neg_preds: matrix of sampled negative predicates
         :param neg_batch: list (from fantasy particle) of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
         :param neg_ents: matrix of particle entity vectors
-        :param neg_link_counts: how many times each link is observed
+        :param neg_link_counts: how many times each link is present in the fantasy particle
         """
         # Resample latent variables
         for _ in range(self.ent_steps):

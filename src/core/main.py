@@ -1,7 +1,7 @@
 import sys, os, pickle, numpy, argparse
 import numpy as np
 
-from model import SemFuncModel_IndependentPreds, SemFuncModel_FactorisedPreds
+from model import SemFuncModel_IndependentPreds, SemFuncModel_MultiIndependentPreds
 from trainingsetup import AdaGradTrainingSetup, AdamTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
 from utils import sub_dict
@@ -57,10 +57,14 @@ def setup_trainer(**kw):
                                  "init_ag_prop",
                                  "freq_alpha"])
     if kw['model'] == 'independent':
-        model_class = SemFuncModel_IndependentPreds
+        if kw['multipred']:
+            model_class = SemFuncModel_MultiIndependentPreds
+        else:
+            model_class = SemFuncModel_IndependentPreds
     elif kw['model'] == 'factorised':
-        model_class = SemFuncModel_FactorisedPreds
-        model_kwargs.update(sub_dict(kw, ["embed_dims"]))
+        raise Exception('factorised pred model is deprecated')
+        #model_class = SemFuncModel_FactorisedPreds
+        #model_kwargs.update(sub_dict(kw, ["embed_dims"]))
     else:
         raise Exception('model class not recognised')
     model = model_class(preds, links, pred_freq, verbose=False, **model_kwargs)
@@ -114,11 +118,15 @@ if __name__ == "__main__":
     parser.add_argument('suffix', nargs='?', default=None)
     parser.add_argument('-thresh', type=int, default=10000)
     parser.add_argument('-overwrite', action='store_true')
+    # Data format
+    parser.add_argument('-multipred', action='store_true')
     # Model hyperparameters
     parser.add_argument('-model', type=str, default='independent')
     parser.add_argument('-dims', type=int, default=40)
     parser.add_argument('-embed_dims', type=int, default=20)
     parser.add_argument('-card', type=int, default=5)
+    parser.add_argument('-freq_alpha', type=float, default=0.75)
+    # Model initialisation
     parser.add_argument('-init_bias', type=float, default=5)
     parser.add_argument('-init_card', type=float, default=8)
     parser.add_argument('-init_range', type=float, default=1)
@@ -127,7 +135,6 @@ if __name__ == "__main__":
     parser.add_argument('-init_verb_prop', type=float, default=0.5)
     parser.add_argument('-init_pat_prop', type=float, default=0.6)
     parser.add_argument('-init_ag_prop', type=float, default=0.6)
-    parser.add_argument('-freq_alpha', type=float, default=0.75)
     # Training setup parameters
     parser.add_argument('-setup', type=str, default='adagrad')
     parser.add_argument('-rate', type=float, default=0.01)
@@ -152,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument('-processes', type=int, default=50)
     parser.add_argument('-ent_burnin', type=int, default=10)
     parser.add_argument('-pred_burnin', type=int, default=2)
+    # Practicalities
     parser.add_argument('-seed', type=int, default=0)
     parser.add_argument('-timeout', type=int, default=0)
     parser.add_argument('-validation', nargs='+', default=[])
