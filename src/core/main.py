@@ -121,7 +121,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a sem-func model")
     # Output and input
     parser.add_argument('suffix', nargs='?', default=None)
-    parser.add_argument('-thresh', type=int, default=10000)
+    parser.add_argument('-thresh', type=int, default=5)
     parser.add_argument('-overwrite', action='store_true')
     # Data format
     parser.add_argument('-multipred', action='store_true')
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     # Training parameters
     parser.add_argument('-epochs', type=int, default=3)
     parser.add_argument('-minibatch', type=int, default=20)
-    parser.add_argument('-processes', type=int, default=50)
+    parser.add_argument('-processes', type=int, default=12)
     parser.add_argument('-ent_burnin', type=int, default=10)
     parser.add_argument('-pred_burnin', type=int, default=2)
     # Practicalities

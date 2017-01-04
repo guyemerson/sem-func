@@ -33,10 +33,9 @@ del data
 
 def add_graph(nodes, graph):
     """
-    Convert data a form suitable for training, adding it to a list
+    Convert data to a form suitable for training, adding it to a list
     :param nodes: list of nodes 
     :param graph: SVO triple, or pair linked by _be_v_id
-    :return: list of nodes, new next free nodeid
     """
     next_id = len(nodes)
     if len(graph) == 2:

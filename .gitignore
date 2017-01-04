@@ -4,5 +4,6 @@
 data/*
 *.out
 *.log
+*.txt
 *~
 src/archive/

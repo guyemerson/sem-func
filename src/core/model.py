@@ -13,13 +13,28 @@ class SemFuncModel():
     The core semantic function model, including the background distribution
     """
     def __init__(self, *args, **kwargs):
+        """
+        Initialise the model
+        """
         raise NotImplementedError
     
     def make_shared(self):
+        """
+        Convert to shared memory
+        """
         raise NotImplementedError
     
     def collect(self):
+        """
+        Package the weights into lists for training setup
+        """
         raise NotImplementedError
+    
+    def get_pred_dict(self):
+        """
+        Create a dict mapping predicate names to indices
+        """
+        return {p:i for i,p in enumerate(self.pred_name)}
     
     # Semantic functions
     

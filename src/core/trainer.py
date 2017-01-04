@@ -2,7 +2,7 @@ import pickle, os, sys
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
 from multiprocessing import Pool, Manager, TimeoutError
-from time import sleep, time
+from time import time
 from random import shuffle
 
 from trainingsetup import TrainingSetup
@@ -183,39 +183,6 @@ class DataInterface():
                     with open(dump_file, 'wb') as f:
                         pickle.dump(self.setup, f)
 
-class MultiPredDataInterface(DataInterface):
-    """
-    Data interface that allows multiple preds for the same node
-    """
-    def load_data(self, data, ent_burnin=0, pred_burnin=0, check=False):
-        """
-        Load data from a list
-        :param data: observed data of the form (nodeid, preds, out_labs, out_ids, in_labs, in_ids), with increasing nodeids
-        :param ent_burnin: number of update steps to take for latent entities
-        :param pred_burnin: number of update steps to take for negative preds
-        """
-        # List of nodes
-        self.nodes = data
-        self.N = len(self.nodes)
-        # Optionally, check that nodeids are increasing integers
-        if check:
-            for i, n in enumerate(self.nodes): assert i == n[0]
-        # Latent entities
-        self.ents = empty((self.N, self.model.D))
-        for i, n in enumerate(self.nodes):
-            # TODO use max vec?
-            self.ents[i] = self.model.init_vec_from_pred(n[1])  #!# Not currently controlling high and low limits
-        for _ in range(ent_burnin):
-            self.setup.resample_conditional_batch(self.nodes, self.ents)
-        # Negative pred samples
-        self.neg_preds = self.model.propose_pred((self.N, self.NEG))
-        for _ in range(pred_burnin):
-            self.setup.resample_pred_batch(self.nodes, self.ents, self.neg_preds)
-        
-        # There are two options here:
-        # 1. Multiply the neg pred gradients by the number of positive preds
-        # 2. Sample extra negative preds
-
 
 class Trainer():
     """
@@ -295,42 +262,45 @@ class Trainer():
         
         # Process the files with a pool of worker processes
         with Pool(self.processes, self.init, maxtasksperchild=maxtasksperchild) as p:  
-            self.training = True
             self.error = None
             initial_time = time()
-            p.map_async(self.work, file_names, 1, self.callback, self.error_callback)
-            while self.training:
-                if self.error:
-                    # Re-raise errors from worker processes
-                    print('Error during training!')
-                    self.kill_queues()  # Kill all update workers, so that the process can exit
-                    raise self.error
-                elif timeout and time() - initial_time > timeout*3600:
+            result = p.map_async(self.work, file_names, chunksize=1, error_callback=self.error_callback)
+            while not result.ready():
+                if timeout and time() - initial_time > timeout*3600:
                     raise TimeoutError
                 else:
                     # Save regularly during training
-                    self.save_and_sleep()
+                    self.save()
+                    sys.stdout.flush()
+                    result.wait(60)
+        
+        # Either training is complete, or there was an error
+        if self.error:
+            # Re-raise errors from worker processes
+            print('Error during training!')
+            self.kill_queues()  # Kill all update workers, so that the process can exit
+            raise self.error
         
         # Once workers are done:
         self.kill_queues()
-        while not (all(q.empty() for q in self.setup.link_update_queues) and \
-                   all(q.empty() for q in self.setup.pred_update_queues)):
+        if not (all(q.empty() for q in self.setup.link_update_queues) and \
+                all(q.empty() for q in self.setup.pred_update_queues)):
             print('Waiting for updates to finish...')
-            self.save_and_sleep()
+            # Block until all queues are empty
+            for q in self.setup.link_update_queues:
+                q.join()
+            for q in self.setup.pred_update_queues:
+                q.join()
         print('Training complete')
         self.save()
     
-    # The following four functions are passed to Pool.map_async, during training
+    # The following three functions are passed to Pool.map_async, during training
     
-    # Callbacks for Pool.map_async
-    # These just set attributes, which will be checked once the instance stops sleeping
-    def callback(self, _):
-        """Callback for pool of workers, once training is complete"""
-        self.training = False
+    # Error callback for Pool.map_async
+    # This just sets an attribute, which will be checked once the process is not writing to disk
     def error_callback(self, e):
         """Callback for pool of workers, if a worker throws an error"""
         self.error = e
-    
     # Initialise each worker with the instance's train_on_file method (as a global variable),
     # so that it is not pickled and piped with each file
     def init(self):
@@ -353,14 +323,6 @@ class Trainer():
             q.put(None)
         for q in self.setup.pred_update_queues:
             q.put(None)
-    
-    def save_and_sleep(self, time=60):
-        """
-        Save, flush stdout, and sleep
-        """
-        self.save()
-        sys.stdout.flush()
-        sleep(60)
     
     def save(self):
         """
