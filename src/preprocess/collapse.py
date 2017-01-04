@@ -1,7 +1,4 @@
-import os, pickle
-from random import shuffle
-from math import floor
-from multiprocessing import Pool
+import pickle, numpy as np
 
 # Collapse triples with _be_v_id to a single node and two preds
 # (discarding if _be_v_id has only one argument)
@@ -17,86 +14,87 @@ with open('/anfs/bigdisc/gete2/wikiwoods/core-5-count_tuple.pkl', 'rb') as f:
 with open('/anfs/bigdisc/gete2/wikiwoods/core-5-vocab.pkl', 'rb') as f:
     pred_name = pickle.load(f)
 ind = {p:i for i,p in enumerate(pred_name)}
+V = len(pred_name)
+
+with open('/anfs/bigdisc/gete2/wikiwoods/core-5-freq.pkl', 'rb') as f:
+    pred_freq = pickle.load(f)
 
 # Filter the triples
 
 print('filtering')
 
-data = []
+multi_count = {}
 
 be = ind['_be_v_id']
 
-for i, item in enumerate(count.items()):
-    triple, n = item
+for triple, n in count.items():
     v,s,o = triple
     if v != be:
-        data.extend([triple]*n)
+        multi_count[triple] = n
     elif s and o:
-        data.extend([(s,o)]*n)
-
-# Randomly split into chunks
-
-print('shuffling')
-
-shuffle(data)
-
-print('chunking')
-
-N = len(data)
-K = 10000
-splits = [floor(i*N/K) for i in range(K)] + [N]
-chunks = [data[splits[i]:splits[i+1]] for i in range(K)]
-del data
-
-# Convert data to the necessary form
-
-def add_graph(nodes, graph):
-    """
-    Convert data a form suitable for training, adding it to a list
-    :param nodes: list of nodes 
-    :param graph: SVO triple, or pair linked by _be_v_id
-    :return: list of nodes, new next free nodeid
-    """
-    next_id = len(nodes)
-    if len(graph) == 2:
-        # two preds linked by _be_v_id
-        nodes.append((next_id, list(graph), [], [], [], []))
+        multi_count[(s,o)] = n
+    elif s:
+        pred_freq[s] -= n
     else:
-        # a verb and up to two arguments
-        verb, agent, patient = graph
-        output = []  # nodes to add to the list 
-        verb_labs = []  # verb arguments, yet to be populated
-        verb_ids = []
-        output.append((next_id, [verb], verb_labs, verb_ids, [], []))
-        new_id = next_id + 1
-        if agent is not None:
-            output.append((new_id, [agent], [], [], [0], [next_id]))
-            verb_labs.append(0)
-            verb_ids.append(new_id)
-            new_id += 1
-        if patient is not None:
-            output.append((new_id, [patient], [], [], [1], [next_id]))
-            verb_labs.append(1)
-            verb_ids.append(new_id)
-            new_id += 1
-        nodes.extend(output)
+        pred_freq[o] -= n
 
-# Convert and save
+del count
+pred_freq[be] = 0
 
-print('converting')
+# Ensure minimum threshold
 
-DIR = '/anfs/bigdisc/gete2/wikiwoods/multicore-5-nodes'
+print('thresholding')
 
-def process(i, chunk):
-    """
-    Convert the graphs in a chunk and save to disk
-    """
-    nodes = []
-    for g in chunk:
-        add_graph(nodes, g)
-    with open(os.path.join(DIR, '{}.pkl'.format(str(i).zfill(4))), 'wb') as f:
-        pickle.dump(nodes, f)
-    print(i)
+thresh = 5
 
-with Pool(40) as p:
-    p.starmap(process, enumerate(chunks))
+# Whether preds should be kept
+keep = np.ones(V, dtype='bool')
+keep[be] = 0
+
+min_count = 0
+
+while min_count < thresh:
+    # Find preds below threshold
+    below_arr = (pred_freq < thresh) * keep
+    below_set = set(below_arr.nonzero()[0])
+    keep[below_arr] = 0
+    print('below threshold:')
+    for p in below_set:
+        print('\t', pred_name[p], pred_freq[p])
+    # Remove graphs with these preds, and update freq
+    remove = []
+    for graph, n in multi_count.items():
+        if any(p in below_set for p in graph):
+            remove.append(graph)
+            for p in graph:
+                if p is not None:
+                    pred_freq[p] -= n
+    for graph in remove:
+        multi_count.pop(graph)
+    # Find new smallest count
+    min_count = pred_freq[keep.nonzero()].min()
+
+# Condense data
+
+print('re-assigning indices')
+
+old_inds = keep.nonzero()[0]
+pred_name = [pred_name[p] for p in old_inds]
+pred_freq = pred_freq[old_inds]
+
+convert = {old:new for new, old in enumerate(old_inds)}
+convert[None] = None
+multi_count = {tuple(convert[p] for p in graph):n for graph, n in multi_count.items()}
+
+# Save aggregate data
+
+print('saving')
+
+with open('/anfs/bigdisc/gete2/wikiwoods/multicore-5-count_tuple.pkl', 'wb') as f:
+    pickle.dump(multi_count, f)
+
+with open('/anfs/bigdisc/gete2/wikiwoods/multicore-5-vocab.pkl', 'wb') as f:
+    pickle.dump(pred_name, f)
+
+with open('/anfs/bigdisc/gete2/wikiwoods/multicore-5-freq.pkl', 'wb') as f:
+    pickle.dump(pred_freq, f)
