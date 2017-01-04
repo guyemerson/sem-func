@@ -31,12 +31,12 @@ for triple, n in count.items():
     v,s,o = triple
     if v != be:
         multi_count[triple] = n
-    elif s and o:
-        multi_count[(s,o)] = n
-    elif s:
+    elif s is None:
+        pred_freq[o] -= n
+    elif o is None:
         pred_freq[s] -= n
     else:
-        pred_freq[o] -= n
+        multi_count[(s,o)] = n
 
 del count
 pred_freq[be] = 0
