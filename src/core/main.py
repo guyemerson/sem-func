@@ -5,51 +5,54 @@ from model import SemFuncModel_IndependentPreds, SemFuncModel_MultiIndependentPr
 from trainingsetup import AdaGradTrainingSetup, AdamTrainingSetup
 from trainer import DataInterface, create_particle, Trainer
 from utils import sub_dict
-from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR, VOCAB_FILE, FREQ_FILE
+from __config__.filepath import DATA_DIR, AUX_DIR, OUT_DIR
 
 def setup_trainer(**kw):
     """
     Setup a semantic function model, ready for training
     """
-    # Set input and output
+    # Set input and output filepaths
+    # Naming convention is <dataset>-<threshold>-<name>
+    
     if kw['multipred']:
         prefix = 'multicore'
     else:
         prefix = 'core'
+    thresh = kw['thresh']
+    suffix = kw['suffix']
     
-    DATA = os.path.join(DATA_DIR, '{}-{}-nodes'.format(prefix, kw['thresh']))
+    # Directory for the data
+    DATA = os.path.join(DATA_DIR, '{}-{}-nodes'.format(prefix, thresh))
     
     output_template = os.path.join(OUT_DIR, '{}-{}-{}')
     
-    if kw['suffix'] is None:
-        kw['suffix'] = 1
-        while os.path.exists(output_template.format(prefix, kw['thresh'], kw['suffix'])+'.pkl'):
-            kw['suffix'] += 1
+    # If no suffix is given, use the smallest integer for which no file exists
+    if suffix is None:
+        suffix = 1
+        while os.path.exists(output_template.format(prefix, thresh, suffix)+'.pkl'):
+            suffix += 1
     
-    OUTPUT = output_template.format(prefix, kw['thresh'], kw['suffix'])
     # Save under OUTPUT.pkl and OUTPUT.aux.pkl
+    OUTPUT = output_template.format(prefix, thresh, suffix)
     
-    # Check the output path is clear
+    # Check the output path is clear, unless overwriting is allowed
     if not kw['overwrite'] and os.path.exists(OUTPUT+'.pkl'):
-        raise Exception('File already exists')
+        raise Exception("File already exists - did you mean to use '-overwrite'?")
     
     # Load vocab for model
-    with open(os.path.join(AUX_DIR, VOCAB_FILE), 'rb') as f:
+    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix, thresh)), 'rb') as f:
         preds = pickle.load(f)
-    with open(os.path.join(AUX_DIR, FREQ_FILE), 'rb') as f:
+    with open(os.path.join(AUX_DIR, '{}-{}-freq.pkl'.format(prefix, thresh)), 'rb') as f:
         pred_freq = pickle.load(f)
     links = ['ARG1', 'ARG2']
-    
-    # Ignore rare preds (e.g. if using core-100)
-    for i in range(len(pred_freq)):
-        if pred_freq[i] < kw['thresh']:
-            pred_freq[i] = 0
     
     # Set random seed, if specified
     if kw['seed']:
         np.random.seed(kw['seed'])
     
     # Set up model
+    
+    # Get hyperparameters
     model_kwargs = sub_dict(kw, ["dims",
                                  "card",
                                  "init_bias",
@@ -61,20 +64,24 @@ def setup_trainer(**kw):
                                  "init_pat_prop",
                                  "init_ag_prop",
                                  "freq_alpha"])
+    # Choose model class 
     if kw['model'] == 'independent':
         if kw['multipred']:
             model_class = SemFuncModel_MultiIndependentPreds
         else:
             model_class = SemFuncModel_IndependentPreds
     elif kw['model'] == 'factorised':
-        raise Exception('factorised pred model is deprecated')
+        raise ValueError('factorised pred model is deprecated')
         #model_class = SemFuncModel_FactorisedPreds
         #model_kwargs.update(sub_dict(kw, ["embed_dims"]))
     else:
-        raise Exception('model class not recognised')
+        raise ValueError('model class not recognised')
+    # Initialise model
     model = model_class(preds, links, pred_freq, verbose=False, **model_kwargs)
     
-    # Set up training hyperparameters
+    # Set up gradient descent algorithm
+    
+    # Get hyperparameters
     setup_kwargs = sub_dict(kw, ["rate",
                                  "rate_ratio",
                                  "l2",
@@ -85,6 +92,7 @@ def setup_trainer(**kw):
                                  "l1_ent",
                                  "ent_steps",
                                  "pred_steps"])
+    # Choose training setup class
     if kw['setup'] == 'adagrad':
         setup_class = AdaGradTrainingSetup
         setup_kwargs.update(sub_dict(kw, ["ada_decay"]))
@@ -93,21 +101,25 @@ def setup_trainer(**kw):
         setup_kwargs.update(sub_dict(kw, ["mean_decay",
                                           "var_decay"]))
     else:
-        raise Exception('setup class not recognised')
+        raise ValueError('setup class not recognised')
+    # Initialise training setup
     setup = setup_class(model, **setup_kwargs)
     
-    # Set up training (without data)
-    particle = create_particle(3,2,5)
+    # Set up trainer (without data)
+    
+    # Initialise particle
+    particle = create_particle(*kw['particle'])
+    # Initialise data interface
     interface = DataInterface(setup,
                               particle,
                               neg_samples = kw['neg_samples'])
-    
+    # Get hyperparameters
     trainer_kwargs = sub_dict(kw, ["processes",
                                    "epochs",
                                    "minibatch",
                                    "ent_burnin",
                                    "pred_burnin"])
-    
+    # Initialise trainer
     trainer = Trainer(interface,
                       data_dir = DATA,
                       output_name = OUTPUT,
@@ -179,4 +191,3 @@ if __name__ == "__main__":
     sys.stdout.flush()
     
     trainer.start(timeout=args.timeout, validation=[x+'.pkl' for x in args.validation], maxtasksperchild=args.maxtasksperchild)
-    

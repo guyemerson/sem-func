@@ -361,8 +361,8 @@ class Trainer():
                                                         'neg_samples']))
         
         if data_dir is None:
-            stem = '-'.join(fname.split('-', maxsplit=2)[:2])
-            data_dir = os.path.join(DATA_DIR,'{}-nodes'.format(stem))
+            prefix, thresh = '-'.join(fname.split('-', maxsplit=2)[:2])
+            data_dir = os.path.join(DATA_DIR,'{}-{}-nodes'.format(prefix, thresh))
         
         trainer = Trainer(interface,
                           data_dir = data_dir,

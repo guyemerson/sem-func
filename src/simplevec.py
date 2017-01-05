@@ -92,5 +92,5 @@ vec.clip(0, out=vec)
 
 print('saving')
 
-with open('/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}.pkl'.format(D, k, str(a).replace('.',''), seed), 'wb') as f:
+with open('/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}.pkl'.format(D, str(k).replace('.',''), str(a).replace('.',''), seed), 'wb') as f:
     pickle.dump(vec, f)
