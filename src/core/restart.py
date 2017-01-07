@@ -8,15 +8,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a sem-func model")
     # File name
     parser.add_argument('fullname', nargs='?', default=None)
-    parser.add_argument('-p', '-prefix', default='multicore')
-    parser.add_argument('-t', '-threshold', type=int, default=5)
-    parser.add_argument('-s', '-suffix', default=None)
-    parser.add_argument('-o', '-output', default=None)
+    parser.add_argument('-p', '--prefix', default='multicore')
+    parser.add_argument('-t', '--threshold', type=int, default=5)
+    parser.add_argument('-s', '--suffix', default=None)
+    parser.add_argument('-o', '--output', default=None)
     # Practicalities
-    parser.add_argument('-clear', action='store_true')
-    parser.add_argument('-timeout', type=int, default=0)
-    parser.add_argument('-validation', nargs='+', default=[])
-    parser.add_argument('-maxtasksperchild', type=int, default=None)
+    parser.add_argument('--clear', action='store_true')
+    parser.add_argument('--timeout', type=int, default=0)
+    parser.add_argument('--validation', nargs='+', default=[])
+    parser.add_argument('--maxtasksperchild', type=int, default=None)
     
     args = parser.parse_args()
     
