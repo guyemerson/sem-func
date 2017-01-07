@@ -356,7 +356,7 @@ class Trainer():
         
         setup, aux_info = TrainingSetup.load(fname, directory)
         
-        interface = DataInterface(setup, (),
+        interface = DataInterface(setup,
                                   **sub_dict(aux_info, ['particle',
                                                         'neg_samples']))
         
