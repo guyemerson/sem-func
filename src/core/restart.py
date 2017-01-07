@@ -21,8 +21,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Set input and output names
-    if args.name:
-        name = args.name
+    if args.fullname:
+        name = args.fullname
     else:
         name = '{}-{}-{}'.format(args.prefix, args.threshold, args.suffix)
     
