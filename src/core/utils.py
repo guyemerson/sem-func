@@ -1,5 +1,6 @@
-from multiprocessing import Array
 import numpy as np
+from multiprocessing import Array
+from bisect import bisect_left
 
 # Shared numpy arrays
 
@@ -121,6 +122,24 @@ def product(iterable):
     for x in iterable:
         res *= x
     return res
+
+def index(sorted_list, x):
+    """
+    Locate the first value in sorted_list exactly equal to x
+    """
+    i = bisect_left(sorted_list, x)
+    if i != len(sorted_list) and sorted_list[i] == x:
+        return i
+    raise ValueError(x)
+
+def cosine(u,v):
+    """
+    Calculate the cosine similarity between two vectors
+    :param u: numpy array
+    :param v: numpy array
+    :return: similarity
+    """
+    return np.dot(u,v) / np.sqrt(np.dot(u,u) * np.dot(v,v))
 
 # The alias method samples from a categorical distribution in O(1) time
 # https://en.wikipedia.org/wiki/Alias_method

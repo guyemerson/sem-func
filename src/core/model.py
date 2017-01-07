@@ -1,11 +1,10 @@
 from math import exp, log
 from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition, flatnonzero, integer
 from numpy.linalg import norm
-from scipy.spatial.distance import cosine
 from scipy.special import expit
 from warnings import warn
 
-from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product, sparse_like
+from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product, sparse_like, index, cosine
 
 
 class SemFuncModel():
@@ -29,12 +28,6 @@ class SemFuncModel():
         Package the weights into lists for training setup
         """
         raise NotImplementedError
-    
-    def get_pred_dict(self):
-        """
-        Create a dict mapping predicate names to indices
-        """
-        return {p:i for i,p in enumerate(self.pred_name)}
     
     # Semantic functions
     
@@ -433,7 +426,7 @@ class SemFuncModel():
     
     def cosine_of_parameters(self, pred1, pred2):
         """
-        Calculate the cosine distance (1 - normalised dot product)
+        Calculate the cosine similarity
         between the weights for a pair of predicates
         :param pred1: a predicate
         :param pred2: a predicate
@@ -443,7 +436,7 @@ class SemFuncModel():
     
     def cosine_of_samples(self, pred1, pred2, **kwargs):
         """
-        Calculate the average cosine distance (1 - normalised dot product)
+        Calculate the average cosine similarity
         between sampled entity vectors conditioned on a pair of predicates
         :param pred1: a predicate
         :param pred2: a predicate
@@ -790,6 +783,14 @@ class SemFuncModel():
         :return: the vector
         """
         raise NotImplementedError
+    
+    def index(self, name):
+        """
+        Find the index of a predicate
+        :param name: predicate string
+        :return: predicate index
+        """
+        return index(self.pred_name, name)
     
     # Summary functions
     
