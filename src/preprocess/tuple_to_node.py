@@ -65,7 +65,7 @@ def add_graph(nodes, graph):
 
 print('converting')
 
-DIR = '/anfs/bigdisc/gete2/wikiwoods/multicore-5-nodes-tmp'
+DIR = '/anfs/bigdisc/gete2/wikiwoods/multicore-5-nodes'
 
 def process(i, chunk):
     """

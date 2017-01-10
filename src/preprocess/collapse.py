@@ -29,13 +29,16 @@ be = ind['_be_v_id']
 
 for triple, n in count.items():
     v,s,o = triple
-    if v != be:
+    if v != be:  # We're only filtering out 'be', so leave everything else
         multi_count[triple] = n
-    elif s is None:
+    elif s is None:  # Skip if only one argument
         pred_freq[o] -= n
-    elif o is None:
+    elif o is None:  # Skip if only one argument
         pred_freq[s] -= n
-    else:
+    elif s == o:  # Skip if arguments are the same
+        pred_freq[o] -= n
+        pred_freq[s] -= n
+    else:  # Keep this pair without 'be'
         multi_count[(s,o)] = n
 
 del count
