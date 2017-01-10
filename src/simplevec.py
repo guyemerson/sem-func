@@ -13,6 +13,10 @@ a = 0.75  # Power that frequencies are raised to under the null hypothesis
 seed = 32
 np.random.seed(seed)
 
+# Dataset
+
+dataset = 'multicore-5'
+
 
 # Assign each context to a random bin
 # By using a defaultdict, the bin is chosen when needed, and then cached
@@ -27,10 +31,10 @@ get_bin = defaultdict(rand_bin)
 
 print('loading')
 
-with open('/anfs/bigdisc/gete2/wikiwoods/multicore-5-count_tuple.pkl', 'rb') as f:
+with open('/anfs/bigdisc/gete2/wikiwoods/{}-count_tuple.pkl'.format(dataset), 'rb') as f:
     count = pickle.load(f)
 
-with open('/anfs/bigdisc/gete2/wikiwoods/multicore-5-vocab.pkl', 'rb') as f:
+with open('/anfs/bigdisc/gete2/wikiwoods/{}-vocab.pkl'.format(dataset), 'rb') as f:
     pred_name = pickle.load(f)
 V = len(pred_name)
 verb = np.array([is_verb(p) for p in pred_name], dtype='bool')
@@ -92,5 +96,9 @@ vec.clip(0, out=vec)
 
 print('saving')
 
-with open('/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}.pkl'.format(D, str(k).replace('.',''), str(a).replace('.',''), seed), 'wb') as f:
+template = '/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}-{}.pkl'
+k_str = str(k).replace('.','')
+a_str = str(a).replace('.','')
+
+with open(template.format(dataset, D, k_str, a_str, seed), 'wb') as f:
     pickle.dump(vec, f)
