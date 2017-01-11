@@ -69,18 +69,16 @@ except FileNotFoundError:
     scores = {}
 
 for filename in sorted(os.listdir(os.path.join(AUX_DIR, 'simplevec'))):
-    try:
-        pre, thr, *_ = filename.split('-')
-    except ValueError:
+    parts = filename.split('-')
+    if len(parts) != 6 or parts[0] != prefix or int(parts[1]) != thresh:
         continue
-    if pre == prefix and int(thr) == thresh:
-        settings = tuple(filename.split('.')[0].split('-'))
-        if settings in scores:
-            continue
-        with gzip.open(os.path.join(AUX_DIR, 'simplevec', filename), 'rb') as f:
-            vec = pickle.load(f)
-        print(filename)
-        scores[settings] = test_all_simplevec(vec)
+    settings = tuple(filename.split('.')[0].split('-'))
+    if settings in scores:
+        continue
+    print(filename)
+    with gzip.open(os.path.join(AUX_DIR, 'simplevec', filename), 'rb') as f:
+        vec = pickle.load(f)
+    scores[settings] = test_all_simplevec(vec)
 
 with open(score_file, 'wb') as f:
     pickle.dump(scores, f)
@@ -106,3 +104,7 @@ def get_max(pos, constr=()):
 for i in [0,1,2,4]:
     print(get_max(i))
 print(get_max([0,1,2,4]))
+
+for i in [0,1,2,4]:
+    print(get_max(i, [(0, '400')]))
+print(get_max([0,1,2,4], [(0, '400')]))
