@@ -1,6 +1,4 @@
-import pickle
-import numpy as np
-from random import randint
+import pickle, gzip, numpy as np
 from collections import defaultdict
 
 from utils import is_verb
@@ -23,7 +21,7 @@ dataset = 'multicore-5'
 
 def rand_bin():
     "Return a random dimension"
-    return randint(0, D-1)
+    return np.random.randint(D)
 
 get_bin = defaultdict(rand_bin)
 
@@ -48,7 +46,8 @@ vec = np.zeros((V, 2*D))
 # Contexts are pairs (pred_index, context_type)
 # where context_type is one of: s(ubject), o(bject), b(e)
 # Contexts for verbs are shifted to the second half of the dimensions
-for graph, n in count.items():
+# Sort the graphs so that the order is stable (treating None as -1)
+for graph, n in sorted(count.items(), key=lambda x:tuple(y if y is not None else -1 for y in x[0])):
     if len(graph) == 2:
         p, q = graph
         vec[p, get_bin[q,'b']] += n
@@ -96,9 +95,9 @@ vec.clip(0, out=vec)
 
 print('saving')
 
-template = '/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}-{}.pkl'
+template = '/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}-{}.pkl.gz'
 k_str = str(k).replace('.','')
 a_str = str(a).replace('.','')
 
-with open(template.format(dataset, D, k_str, a_str, seed), 'wb') as f:
+with gzip.open(template.format(dataset, D, k_str, a_str, seed), 'wb') as f:
     pickle.dump(vec, f)
