@@ -315,7 +315,9 @@ class AdaGradTrainingSetup(TrainingSetup):
         super().make_shared()
         self.link_sqsum = [make_shared(m) for m in self.link_sqsum]
         self.pred_sqsum = [make_shared(m) for m in self.pred_sqsum]
-        
+    
+    # TODO reduce redundancy between link and pred update code - move things to SparseRows
+    
     def descend(self, link_gradients, pred_gradients, n_pred, timeout_time=1, timeout_attempts=20):
         """
         Divide step lengths by the sum of the square gradients
@@ -371,6 +373,8 @@ class AdaGradTrainingSetup(TrainingSetup):
                     self.pred_update_queues[i].put((sq, grad), timeout=timeout_time)
                     break
                 except Full:
+                    qsize = self.pred_update_queues[i].qsize()
+                    logging.exception('Pred queue {} timeout, qsize {}'.format(i, qsize))
                     continue
             else:
                 #raise Full
