@@ -1035,27 +1035,40 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         vec[argpartition(self.pred_wei[pred], -self.C)[-self.C:]] = 1
         return vec
     
-    def closest_preds(self, preds, number=1):
+    def closest_preds_by_ind(self, pred, number=50):
         """
-        Find the nearest neighbour to some preds
-        :param preds: an iterable of predicates
+        Find the nearest neighbour to a pred
+        :param pred: a predicate name
         :param number: how many neighbours to return (default 1)
-        :return: the nearest neighbours
+        :return: the nearest neighbours (closest last)
         """
-        res = []
-        for p in preds:
-            vec = self.pred_wei[p]
-            if not vec.any():  # if all entries are zero
-                res.append(None)
-                continue
-            dot_prod = dot(self.pred_wei, vec)
-            dist = dot_prod / norm(self.pred_wei, axis=1)
-            dist = nan_to_num(dist)
-            # The closest pred will have the second largest dot product
-            # (Largest is the pred itself)
-            indices = dist.argpartition(tuple(range(-1-number,0)))[-1-number:-1]
-            res.append(indices)
-        return res
+        # Get the parameters for the predicate
+        vec = self.pred_wei[pred]
+        if not vec.any():  # if all entries are zero
+            return None
+        
+        # Find the distance to other predicates
+        dot_prod = dot(self.pred_wei, vec)
+        dist = dot_prod / norm(self.pred_wei, axis=1)
+        dist = nan_to_num(dist)
+        # The closest pred will have the second largest dot product
+        # (Largest is the pred itself)
+        return dist.argpartition(tuple(range(-1-number,0)))[-1-number:-1]
+        
+    
+    def closest_preds(self, name, number=50):
+        """
+        Find the nearest neighbour to a pred
+        :param pred: a predicate name
+        :param number: how many neighbours to return (default 1)
+        :return: names of the nearest neighbours (closest last)
+        """
+        ind = self.index(name)
+        closest_inds = self.closest_preds_by_ind(ind, number)
+        if closest_inds is not None:
+            return [self.pred_name[i] for i in closest_inds]
+        else:
+            return None
 
 '''
 class SemFuncModel_FactorisedPreds(SemFuncModel):

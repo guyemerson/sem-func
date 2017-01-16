@@ -1,4 +1,4 @@
-import sys, os, pickle, numpy, argparse
+import sys, os, pickle, numpy, argparse, logging
 import numpy as np
 
 from model import SemFuncModel_IndependentPreds, SemFuncModel_MultiIndependentPreds
@@ -130,6 +130,7 @@ def setup_trainer(**kw):
 if __name__ == "__main__":
     numpy.set_printoptions(precision=3, suppress=True, threshold=numpy.nan)
     
+    # Define command line arguments
     parser = argparse.ArgumentParser(description="Train a sem-func model")
     # Output and input
     parser.add_argument('suffix', nargs='?', default=None)
@@ -176,18 +177,34 @@ if __name__ == "__main__":
     parser.add_argument('-processes', type=int, default=12)
     parser.add_argument('-ent_burnin', type=int, default=10)
     parser.add_argument('-pred_burnin', type=int, default=2)
-    # Practicalities
+    # Practical stuff
     parser.add_argument('-seed', type=int, default=0)
     parser.add_argument('-timeout', type=int, default=0)
     parser.add_argument('-validation', nargs='+', default=[])
     parser.add_argument('-maxtasksperchild', type=int, default=None)
+    parser.add_argument('-debug', action='store_true')
+    parser.add_argument('-logging', default='WARNING')
     
+    # Get command line arguments
     args = parser.parse_args()
     arg_dict = dict(args._get_kwargs())
     
+    # Allow remote debugging
+    if args.debug:  
+        from pdb_clone import pdbhandler
+        pdbhandler.register()
+        # To debug, run: `pdb-attach --kill --pid PID`
+        # child pid can be found with: `ps x --forest`
+    
+    # Initialise trainer object
     trainer = setup_trainer(**arg_dict)
     
     print("Set up complete, beginning training...")
     sys.stdout.flush()
     
-    trainer.start(timeout=args.timeout, validation=[x+'.pkl' for x in args.validation], maxtasksperchild=args.maxtasksperchild)
+    # Start training
+    trainer.start(timeout=args.timeout,
+                  validation=[x+'.pkl' for x in args.validation],
+                  debug=args.debug,
+                  logging_level=logging.getLevelName(args.logging),
+                  maxtasksperchild=args.maxtasksperchild)

@@ -1,9 +1,10 @@
-import pickle, os
+import pickle, os, logging
 from numpy import zeros, zeros_like, sqrt
 from multiprocessing import Manager, Process
+from queue import Full
 
 from __config__.filepath import INIT_DIR
-from utils import make_shared, sparse_like, shared_zeros_like
+from utils import make_shared, shared_zeros_like
 
 class TrainingSetup():
     """
@@ -71,10 +72,12 @@ class TrainingSetup():
         :param batch: an iterable of (nodeid, out_labs, out_ids, in_labs, in_ids) tuples
         :param ents: a matrix of entity vectors (indexed by nodeid) 
         """
+        logging.info('begin TrainingSetup.resample_background_batch')
         for nodeid, out_labs, out_ids, in_labs, in_ids in batch:
             out_vecs = [ents[i] for i in out_ids]
             in_vecs = [ents[i] for i in in_ids]
             ents[nodeid] = self.model.resample_background(out_labs, out_vecs, in_labs, in_vecs)
+        logging.info('end TrainingSetup.resample_background_batch')
     
     def resample_conditional_batch(self, batch, ents):
         """
@@ -83,11 +86,13 @@ class TrainingSetup():
         :param batch: an iterable of (nodeid, pred, out_labs, out_ids, in_labs, in_ids) tuples
         :param ents: a matrix of entity vectors (indexed by nodeid)
         """
+        logging.info('begin TrainingSetup.resample_conditional_batch')
         for nodeid, pred, out_labs, out_ids, in_labs, in_ids in batch:
             vec = ents[nodeid]
             out_vecs = ents[out_ids]
             in_vecs = ents[in_ids]
             self.model.resample_conditional(vec, pred, out_labs, out_vecs, in_labs, in_vecs)
+        logging.info('end TrainingSetup.resample_conditional_batch')
     
     def resample_pred_batch(self, batch, ents, neg_preds):
         """
@@ -97,12 +102,14 @@ class TrainingSetup():
         :param ents: matrix of entity vectors
         :param neg_preds: matrix of negative preds
         """
+        logging.info('begin TrainingSetup.resample_pred_batch')
         for x in batch:
             nid = x[0]
             old_preds = neg_preds[nid]
             vec = ents[nid]
             for i, pred in enumerate(old_preds):
                 old_preds[i] = self.model.resample_pred(vec, pred)
+        logging.info('end TrainingSetup.resample_pred_batch')
     
     # Batch gradients
     
@@ -113,6 +120,7 @@ class TrainingSetup():
         :param ents: a matrix of particle entity vectors  
         :return: gradient matrices
         """
+        logging.info('begin TrainingSetup.observe_particle_batch')
         gradient_matrices = [zeros_like(m) for m in self.link_weights]
         for nodeid, out_labs, out_ids, in_labs, _ in batch:
             # For each node, add gradients from outgoing links
@@ -120,6 +128,7 @@ class TrainingSetup():
             vec = ents[nodeid]
             out_vecs = [ents[i] for i in out_ids]
             self.model.observe_out_links(vec, out_labs, out_vecs, gradient_matrices, len(in_labs))
+        logging.info('end TrainingSetup.observe_particle_batch')
         return gradient_matrices
     
     def observe_latent_batch(self, batch, ents, neg_preds):
@@ -130,6 +139,7 @@ class TrainingSetup():
         :param neg_preds: a matrix of negative samples of preds
         :return: link gradient matrices, pred gradient matrices
         """
+        logging.info('begin TrainingSetup.observe_latent_batch')
         # Initialise gradient matrices
         link_grads, pred_grads = self.model.init_observe_latent_batch(batch, neg_preds)
         link_counts = zeros(self.model.L)
@@ -142,6 +152,7 @@ class TrainingSetup():
             in_vecs = [ents[i] for i in in_ids]
             # Observe the gradient
             self.model.observe_latent(vec, pred, npreds, out_labs, out_vecs, in_labs, in_vecs, link_grads, pred_grads, link_counts)
+        logging.info('end TrainingSetup.observe_latent_batch')
         return link_grads, pred_grads, link_counts
     
     # Gradient descent
@@ -185,6 +196,7 @@ class TrainingSetup():
         :param neg_ents: matrix of particle entity vectors
         :param neg_link_counts: how many times each link is present in the fantasy particle
         """
+        logging.info('begin TrainingSetup.train_batch ({})'.format(len(pos_batch)))
         # Resample latent variables
         for _ in range(self.ent_steps):
             self.resample_conditional_batch(pos_batch, pos_ents)
@@ -215,6 +227,7 @@ class TrainingSetup():
         # Descend
         #preds = [x[1] for x in pos_batch]  # Only regularise the preds we've just seen
         self.descend(link_dels, pred_dels, neg_preds.shape[1]+1)
+        logging.info('end TrainingSetup.train_batch')
     
     # Testing functions
     
@@ -303,10 +316,11 @@ class AdaGradTrainingSetup(TrainingSetup):
         self.link_sqsum = [make_shared(m) for m in self.link_sqsum]
         self.pred_sqsum = [make_shared(m) for m in self.pred_sqsum]
         
-    def descend(self, link_gradients, pred_gradients, n_pred):
+    def descend(self, link_gradients, pred_gradients, n_pred, timeout_time=1, timeout_attempts=20):
         """
         Divide step lengths by the sum of the square gradients
         """
+        logging.info('begin TrainingSetup.descend')
         for i, grad in enumerate(link_gradients):
             # Add regularisation
             if i < len(self.model.link_local_weights): #!# Specific to current model...
@@ -324,7 +338,21 @@ class AdaGradTrainingSetup(TrainingSetup):
             # Multiply by learning rate
             grad *= self.rate_link
             # Descend (or rather, add to queue)
-            self.link_update_queues[i].put((sq, grad))
+            # Try multiple times with a timeout, in case the queue blocks
+            for _ in range(timeout_attempts):
+                try:
+                    self.link_update_queues[i].put((sq, grad), timeout=timeout_time)
+                    break
+                except Full:
+                    qsize = self.link_update_queues[i].qsize()
+                    logging.exception('Link queue {} timeout, qsize {}'.format(i, qsize))
+                    continue
+            else:
+                #raise Full
+                # wait here to allow inspection in debugging
+                while True:
+                    from time import sleep
+                    sleep(1)
         
         for i, grad in enumerate(pred_gradients):
             # Add regularisation
@@ -337,10 +365,23 @@ class AdaGradTrainingSetup(TrainingSetup):
             # Multiply by learning rate
             grad.array *= self.rate_pred
             # Descend (or rather, add to queue)
-            self.pred_update_queues[i].put((sq, grad))
+            # Try multiple times with a timeout, in case the queue blocks
+            for _ in range(timeout_attempts):
+                try:
+                    self.pred_update_queues[i].put((sq, grad), timeout=timeout_time)
+                    break
+                except Full:
+                    continue
+            else:
+                #raise Full
+                # wait here to allow inspection in debugging
+                while True:
+                    from time import sleep
+                    sleep(1)
         
         # Recalculate average predicate
         self.model.calc_av_pred()
+        logging.info('end TrainingSetup.descend')
     
     def link_update_constructor(self, i):
         """

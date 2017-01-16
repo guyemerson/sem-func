@@ -1,4 +1,4 @@
-import pickle, os, sys
+import pickle, os, sys, logging
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
 from multiprocessing import Pool, Manager, TimeoutError
@@ -94,10 +94,12 @@ class DataInterface():
         :param ent_burnin: number of update steps to take for latent entities
         :param pred_burnin: number of update steps to take for negative preds
         """
+        logging.info('begin DataInterface.load_file')
         data = pickle.load(filehandle)
         self.load_data(data, ent_burnin, pred_burnin)
         self.filename = filehandle.name
         self.epochs = 0
+        logging.info('end DataInterface.load_file')
     
     def report(self, histogram_bins, bias_histogram_bins, num_preds=5):
         """
@@ -135,13 +137,13 @@ class DataInterface():
         print('nearest neighbours:')
         # Get frequent preds
         if not hasattr(self, 'pred_list'):
-            self.pred_list = list(self.model.freq.argpartition(tuple(range(-1,-1-num_preds,-1)))[-num_preds:])
+            self.pred_list = list(self.model.freq.argpartition(tuple(range(-num_preds,0)))[-num_preds:])
         # Get the first few preds in the current file
         self.pred_list[num_preds:] = [n[1] for n in self.nodes[:num_preds]]
-        nearest = self.model.closest_preds(self.pred_list, 3)
-        for i, p in enumerate(self.pred_list):
-            if nearest[i] is not None:
-                neighbours = ', '.join(self.model.pred_name[x] for x in nearest[i])
+        for p in self.pred_list:
+            nearest = self.model.closest_preds_by_ind(p, 3)
+            if nearest is not None:
+                neighbours = ', '.join(self.model.pred_name[x] for x in nearest)
             else:
                 neighbours = ''
             print('{}: {}'.format(self.model.pred_name[p], neighbours))
@@ -159,6 +161,7 @@ class DataInterface():
             (default: 4, 5, 6, 10)
         :param dump_file: (optional) file to save the trained model (dumps after printing)
         """
+        logging.info('begin DataInterface.train')
         # Indices of nodes, to be randomised
         indices = arange(self.N)
         for e in range(epochs):
@@ -182,6 +185,7 @@ class DataInterface():
                 if dump_file:
                     with open(dump_file, 'wb') as f:
                         pickle.dump(self.setup, f)
+        logging.info('end DataInterface.train')
 
 
 class Trainer():
@@ -233,6 +237,7 @@ class Trainer():
         (without saving to disk)
         """
         print(fname)
+        logging.info('begin Trainer.train_on_file, {}'.format(fname))
         with open(os.path.join(self.data_dir, fname), 'rb') as f:
             self.interface.load_file(f,
                                      ent_burnin = self.ent_burnin,
@@ -240,8 +245,9 @@ class Trainer():
         self.interface.train(epochs = self.epochs,
                              minibatch = self.minibatch)
         self.completed_files.append(fname)
+        logging.info('end Trainer.train_on_file, {}'.format(fname))
         
-    def start(self, timeout=None, validation=None, maxtasksperchild=None):
+    def start(self, timeout=None, validation=None, debug=False, logging_level=logging.WARNING, maxtasksperchild=None):
         """
         Begin training
         :param timeout: max number of hours to spend
@@ -261,12 +267,12 @@ class Trainer():
         print('{} files to process'.format(len(file_names)))
         
         # Process the files with a pool of worker processes
-        with Pool(self.processes, self.init, maxtasksperchild=maxtasksperchild) as p:  
+        with Pool(self.processes, self.init, [debug, logging_level], maxtasksperchild) as p:  
             self.error = None
             initial_time = time()
             result = p.map_async(self.work, file_names, chunksize=1, error_callback=self.error_callback)
             while not result.ready():
-                if timeout and time() - initial_time > timeout*3600:
+                if timeout and time() - initial_time > timeout*3600:  # Check time elapsed, in hours
                     raise TimeoutError
                 else:
                     # Save regularly during training
@@ -303,10 +309,19 @@ class Trainer():
         self.error = e
     # Initialise each worker with the instance's train_on_file method (as a global variable),
     # so that it is not pickled and piped with each file
-    def init(self):
+    # Also enable debugging and logging options
+    def init(self, debug=False, logging_level=logging.WARNING):
         """Initialisation function for workers, to set up the model and training environment"""
         global train_on_file
         train_on_file = self.train_on_file
+        # Allow remote debugging
+        if debug:
+            from pdb_clone import pdbhandler
+            pdbhandler.register()
+        # Start logging
+        import logging
+        pid = os.getpid()
+        logging.basicConfig(filename='{}.log'.format(pid), level=logging_level)
     # The train_on_file function will be available in each worker
     # This is a static method so that it can be pickled - from Python 3.5, see https://bugs.python.org/issue23611
     @staticmethod
@@ -328,7 +343,8 @@ class Trainer():
         """
         Save trained model to disk
         """
-        with open(self.output_name+'.pkl', 'wb') as f:
+        # Write the files without overwriting (in case this is interrupted)
+        with open(self.output_name+'.pkl.tmp', 'wb') as f:
             # Shallow copy of the setup
             crucial = copy(self.setup)
             # Remove queues (which can't be pickled)
@@ -336,11 +352,14 @@ class Trainer():
             crucial.pred_update_queues = [q.qsize() for q in crucial.pred_update_queues]
             # Save the file!
             pickle.dump(crucial, f)
-        with open(self.output_name+'.aux.pkl', 'wb') as f:
+        with open(self.output_name+'.aux.pkl.tmp', 'wb') as f:
             # Save the aux info, and the list of completed files
             actual_info = copy(self.aux_info)
             actual_info['completed_files'] = self.completed_files._getvalue()
             pickle.dump(actual_info, f)
+        # Replace the old files with the new ones
+        os.replace(self.output_name+'.pkl.tmp', self.output_name+'.pkl')
+        os.replace(self.output_name+'.aux.pkl.tmp', self.output_name+'.aux.pkl')
     
     @staticmethod
     def load(fname, directory=INIT_DIR, data_dir=None, output_name=None, output_dir=None):
