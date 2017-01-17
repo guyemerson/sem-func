@@ -1,4 +1,4 @@
-import pickle, os, sys, logging
+import pickle, os, sys, logging.handlers
 from numpy import arange, empty, inf, random, unravel_index, zeros
 from copy import copy
 from multiprocessing import Pool, Manager, TimeoutError
@@ -319,9 +319,9 @@ class Trainer():
             from pdb_clone import pdbhandler
             pdbhandler.register()
         # Start logging
-        import logging
         pid = os.getpid()
-        logging.basicConfig(filename='{}.log'.format(pid), level=logging_level)
+        handler = logging.handlers.RotatingFileHandler('{}.log'.format(pid), maxBytes=1048576, backupCount=1)
+        logging.basicConfig(level=logging_level, handlers=[handler])
     # The train_on_file function will be available in each worker
     # This is a static method so that it can be pickled - from Python 3.5, see https://bugs.python.org/issue23611
     @staticmethod

@@ -1,5 +1,7 @@
-import numpy as np
+import numpy as np, pickle, os
 from scipy.stats import spearmanr
+
+from __config__.filepath import AUX_DIR
 
 # Evaluation
 
@@ -195,3 +197,51 @@ def compare(old, new, pairs, gold=None, n=20, direction='both'):
         if gold: print('({})'.format(gold[i]))
         print(old_scores[i])
         print(new_scores[i])
+
+# Evaluation with specific lookup
+
+def get_test_all(prefix, thresh):
+    """
+    Get a testing function for a specific pred lookup
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    """
+    # Load files
+    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_name = pickle.load(f)
+    with open(os.path.join(AUX_DIR, '{}-{}-freq.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_freq = pickle.load(f)
+    # Get lookup dictionaries
+    freq_lookup = get_freq_lookup_dicts(pred_name, pred_freq)
+    # Get datasets
+    simlex = get_simlex()
+    wordsim = get_wordsim()
+    # Get common pairs in SimLex
+    simlex_common = ([], [])
+    for pair, score in zip(*simlex[0]):
+        if all(pred_freq[freq_lookup['n'].get(x,0)] > 1000 for x in pair):
+            simlex_common[0].append(pair)
+            simlex_common[1].append(score)
+    # Define the testing function
+    def test_all(sim, ret=True):
+        """
+        Test the similarity function on all datasets
+        :param sim: function mapping pairs of predicate indices to similarity scores
+        :param ret: set True to return the scores
+        """
+        n_sim = with_lookup(sim, freq_lookup['n'])
+        v_sim = with_lookup(sim, freq_lookup['v'])
+        n = evaluate(n_sim, *simlex[0])
+        v = evaluate(v_sim, *simlex[1])
+        s = evaluate(n_sim, *wordsim[0])
+        r = evaluate(n_sim, *wordsim[1])
+        c = evaluate(n_sim, *simlex_common)
+        print('noun:', n)
+        print('verb:', v)
+        print('sim.:', s)
+        print('rel.:', r)
+        print('cmn.:', c)
+        if ret:
+            return n, v, s, r, c
+    
+    return test_all
