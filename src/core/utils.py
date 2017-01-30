@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np, signal, traceback
 from multiprocessing import Array
 from bisect import bisect_left
 
@@ -240,3 +240,56 @@ def reform_out_links(self, node, ents):
         out_labs.append(l.rargname)
         out_vecs.append(ents[l.end])
     return out_labs, out_vecs
+
+# Running code with a timeout
+
+class UserTimeoutError(Exception):
+    """
+    Errors thrown by Timeout context manager
+    """
+
+class Timeout:
+    """
+    Context manager that allows running code with a timeout
+    """
+    def __init__(self, seconds=1, error_message=None):
+        """
+        Initialise settings
+        :param seconds: number of seconds to wait
+        :param error_message: message to include in UserTimeoutError
+        """
+        self.seconds = seconds
+        if error_message is not None:
+            self.error_message = error_message
+        else:
+            # Default error message
+            self.error_message = 'Timeout after {} second'.format(seconds)
+            if seconds is not 1:  # Pluralise if not 1 second 
+                self.error_message += 's'
+
+    def handle_timeout(self, signum, frame):
+        """
+        Raise an error - function to be called by signal module
+        :param signum: signal that was sent
+        :param frame: stack frame
+        """
+        # Get the raw traceback from the current stack frame
+        stack = traceback.extract_stack(frame)
+        # Raise an error with the message and the traceback
+        raise UserTimeoutError(self.error_message, stack)
+
+    def __enter__(self):
+        """
+        Enter the context
+        """
+        # Listen to SIGALRM with self.handle_timeout
+        signal.signal(signal.SIGALRM, self.handle_timeout)
+        # Schedule a signal to be sent after specified number of seconds
+        signal.alarm(self.seconds)
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        """
+        Exit the context
+        """
+        # Cancel the scheduled signal
+        signal.alarm(0)

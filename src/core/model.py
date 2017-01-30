@@ -1,10 +1,12 @@
+import logging
 from math import exp, log
 from numpy import array, random, dot, zeros, zeros_like, outer, unravel_index, bool_, empty, histogram, count_nonzero, inf, tril, nan_to_num, tensordot, argpartition, flatnonzero, integer
 from numpy.linalg import norm
 from scipy.special import expit
 from warnings import warn
+from time import sleep
 
-from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product, sparse_like, index, cosine
+from utils import make_shared, shared_zeros, is_verb, init_alias, alias_sample, product, sparse_like, index, cosine, Timeout, UserTimeoutError
 
 
 class SemFuncModel():
@@ -922,8 +924,9 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         # Ignore preds that don't occur
         self.pred_wei[self.freq == 0] = 0
         
-        # For sampling:
-        self.calc_av_pred()  # average predicate
+        # Average predicate, for sampling
+        self.av_pred = shared_zeros((self.D,))
+        self.calc_av_pred()
         
         # Package for training setup
         self.collect()
@@ -936,6 +939,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         self.ent_bias = make_shared(self.ent_bias)
         self.pred_wei = make_shared(self.pred_wei)
         self.pred_bias = make_shared(self.pred_bias)
+        self.av_pred = make_shared(self.av_pred)
         # Update pointers in collected lists of weights
         self.collect()
     
@@ -979,7 +983,7 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         (used as an approximation in conditional sampling)
         """
         # Weighted sum of predicates
-        self.av_pred = dot(self.freq, self.pred_wei)
+        self.av_pred[:] = dot(self.freq, self.pred_wei)
     
     def observe_pred(self, vector, pred, matrices=None):
         """
@@ -1054,7 +1058,6 @@ class SemFuncModel_IndependentPreds(SemFuncModel):
         # The closest pred will have the second largest dot product
         # (Largest is the pred itself)
         return dist.argpartition(tuple(range(-1-number,0)))[-1-number:-1]
-        
     
     def closest_preds(self, name, number=50):
         """

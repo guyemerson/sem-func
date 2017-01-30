@@ -255,7 +255,7 @@ class Trainer():
         :param maxtasksperchild: max number of files each worker should process before being restarted
         """
         # Workers to update the shared weights from queued gradients
-        self.setup.start_update_workers()        
+        self.setup.start_update_workers()
         
         # Files to be trained on
         file_name_set = set(os.listdir(self.data_dir))
@@ -284,19 +284,12 @@ class Trainer():
         if self.error:
             # Re-raise errors from worker processes
             print('Error during training!')
-            self.kill_queues()  # Kill all update workers, so that the process can exit
+            self.setup.terminate_update_workers(wait=False)  # Kill all update workers, so that the process can exit
             raise self.error
         
-        # Once workers are done:
-        self.kill_queues()
-        if not (all(q.empty() for q in self.setup.link_update_queues) and \
-                all(q.empty() for q in self.setup.pred_update_queues)):
-            print('Waiting for updates to finish...')
-            # Block until all queues are empty
-            for q in self.setup.link_update_queues:
-                q.join()
-            for q in self.setup.pred_update_queues:
-                q.join()
+        # Once training workers are done
+        self.setup.terminate_update_workers()
+        
         print('Training complete')
         self.save()
     
@@ -320,7 +313,7 @@ class Trainer():
             pdbhandler.register()
         # Start logging
         pid = os.getpid()
-        handler = logging.handlers.RotatingFileHandler('{}.log'.format(pid), maxBytes=1048576, backupCount=1)
+        handler = logging.handlers.RotatingFileHandler('{}.log'.format(pid), maxBytes=1048576, backupCount=1, delay=True)
         logging.basicConfig(level=logging_level, handlers=[handler])
     # The train_on_file function will be available in each worker
     # This is a static method so that it can be pickled - from Python 3.5, see https://bugs.python.org/issue23611
@@ -328,16 +321,6 @@ class Trainer():
     def work(fname):
         """Job function for workers, to apply to each file"""
         train_on_file(fname)
-        # TODO - sometimes one worker hangs...
-    
-    def kill_queues(self):
-        """
-        Put None on each queue, to signal that that worker should stop
-        """
-        for q in self.setup.link_update_queues:
-            q.put(None)
-        for q in self.setup.pred_update_queues:
-            q.put(None)
     
     def save(self):
         """

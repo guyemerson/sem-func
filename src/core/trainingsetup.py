@@ -1,10 +1,10 @@
 import pickle, os, logging
 from numpy import zeros, zeros_like, sqrt
 from multiprocessing import Manager, Process
-from queue import Full
+from time import sleep
 
 from __config__.filepath import INIT_DIR
-from utils import make_shared, shared_zeros_like
+from utils import make_shared, shared_zeros_like, Timeout, UserTimeoutError
 
 class TrainingSetup():
     """
@@ -43,6 +43,8 @@ class TrainingSetup():
         # Metropolis-Hasting steps
         self.ent_steps = ent_steps
         self.pred_steps = pred_steps
+        # Multiprocessing
+        self.updating = False
     
     def inherit(self):
         """
@@ -271,22 +273,55 @@ class TrainingSetup():
         return setup, aux_info
     
     # Multiprocessing
+        
+    def update_av_pred(self):
+        """
+        Update function for average predicate
+        """
+        while self.updating:
+            try:
+                with Timeout():
+                    self.model.calc_av_pred()
+            except UserTimeoutError:
+                logging.exception('calc_av_pred timed out')
+            sleep(5)
     
     def start_update_workers(self):
         """
         Start worker processes to manage updates
         """
+        self.updating = True
         # Queues for weight updates
         manager = Manager()
         self.link_update_queues = [manager.Queue() for _ in self.link_weights]
         self.pred_update_queues = [manager.Queue() for _ in self.pred_weights]
         # Processes to consume the queued weight updates
         for i in range(len(self.link_weights)):
-            worker = Process(target=self.link_update_constructor(i))
-            worker.start()
+            Process(target=self.link_update_constructor(i)).start()
         for i in range(len(self.pred_weights)):
-            worker = Process(target=self.pred_update_constructor(i))
-            worker.start()
+            Process(target=self.pred_update_constructor(i)).start()
+        # Process to update average predicate
+        Process(target=self.update_av_pred).start()
+    
+    def terminate_update_workers(self, wait=True):
+        """
+        Terminate all worker processes managing updates
+        :param wait: (default True) wait until all update queues have been emptied
+        """
+        self.updating = False
+        # Put None on each queue, to signal that that worker should stop
+        # (the model's update functions should respond to this)
+        for q in self.setup.link_update_queues:
+            q.put(None)
+        for q in self.setup.pred_update_queues:
+            q.put(None)
+        
+        if wait:
+            # Block until all queues are empty
+            for q in self.setup.link_update_queues:
+                q.join()
+            for q in self.setup.pred_update_queues:
+                q.join()
 
 
 class AdaGradTrainingSetup(TrainingSetup):
@@ -317,6 +352,7 @@ class AdaGradTrainingSetup(TrainingSetup):
         self.pred_sqsum = [make_shared(m) for m in self.pred_sqsum]
     
     # TODO reduce redundancy between link and pred update code - move things to SparseRows
+    # Need more lists like all_weights, for L1, L2, rate, sqsum, update_queues
     
     def descend(self, link_gradients, pred_gradients, n_pred, timeout_time=1, timeout_attempts=20):
         """
@@ -325,66 +361,87 @@ class AdaGradTrainingSetup(TrainingSetup):
         logging.info('begin TrainingSetup.descend')
         for i, grad in enumerate(link_gradients):
             # Add regularisation
+            logging.info('calculating step for link array {}'.format(i))
+            logging.info('choose L1/L2')
             if i < len(self.model.link_local_weights): #!# Specific to current model...
                 L1 = self.L1_link
                 L2 = self.L2_link
             else:
                 L1 = self.L1_ent
                 L2 = self.L2_ent
+            logging.info('add L1')
             grad -= L1
+            logging.info('add L2')
             grad -= self.link_weights[i] * L2
             # Calculate square
+            logging.info('square')
             sq = grad ** 2
             # Divide by root sum square
+            logging.info('divide by root sum square')
             grad /= sqrt((self.link_sqsum[i] + sq).clip(10**-12))  # Prevent zero-division errors
             # Multiply by learning rate
+            logging.info('multiply by learning rate')
             grad *= self.rate_link
             # Descend (or rather, add to queue)
             # Try multiple times with a timeout, in case the queue blocks
+            logging.info('add to queue')
             for _ in range(timeout_attempts):
+                logging.info('attempt {}'.format(_))
                 try:
-                    self.link_update_queues[i].put((sq, grad), timeout=timeout_time)
+                    with Timeout(timeout_time):
+                        self.link_update_queues[i].put((sq, grad), timeout=timeout_time)
+                    logging.info('success'.format(_))
                     break
-                except Full:
+                except UserTimeoutError:
                     qsize = self.link_update_queues[i].qsize()
                     logging.exception('Link queue {} timeout, qsize {}'.format(i, qsize))
                     continue
             else:
                 #raise Full
                 # wait here to allow inspection in debugging
+                logging.info('waiting')
                 while True:
                     from time import sleep
                     sleep(1)
         
         for i, grad in enumerate(pred_gradients):
             # Add regularisation
+            logging.info('calculating step for pred array {}'.format(i))
+            logging.info('add L1')
             grad.array[::n_pred] -= self.L1_pred
+            logging.info('add L2')
             grad.array[::n_pred] -= self.pred_weights[i][grad.indices[::n_pred]] * self.L2_pred
             # Calculate square
+            logging.info('square')
             sq = grad.array ** 2
             # Divide by root sum square
+            logging.info('divide by root sum square')
             grad.array /= sqrt((self.pred_sqsum[i][grad.indices] + sq).clip(10**-12))  # Prevent zero-division errors
             # Multiply by learning rate
+            logging.info('multiply by learning rate')
             grad.array *= self.rate_pred
             # Descend (or rather, add to queue)
             # Try multiple times with a timeout, in case the queue blocks
+            logging.info('add to queue')
             for _ in range(timeout_attempts):
+                logging.info('attempt {}'.format(_))
                 try:
-                    self.pred_update_queues[i].put((sq, grad), timeout=timeout_time)
+                    with Timeout(timeout_time):
+                        self.pred_update_queues[i].put((sq, grad))
+                    logging.info('success'.format(_))
                     break
-                except Full:
+                except UserTimeoutError:
                     qsize = self.pred_update_queues[i].qsize()
                     logging.exception('Pred queue {} timeout, qsize {}'.format(i, qsize))
                     continue
             else:
                 #raise Full
                 # wait here to allow inspection in debugging
+                logging.info('waiting')
                 while True:
                     from time import sleep
                     sleep(1)
         
-        # Recalculate average predicate
-        self.model.calc_av_pred()
         logging.info('end TrainingSetup.descend')
     
     def link_update_constructor(self, i):
