@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.special import expit
+from math import ceil
 
 # Given a predicate's semantic function, calculate a distribution over entity vectors,
 # approximating the posterior distribution over entities, given that the predicate is true
@@ -9,8 +10,8 @@ from scipy.special import expit
 def get_semfunc(pred_wei, pred_bias):
     """
     Define a semantic function, based on a set of weights, and a bias
-    :param pred_wei:
-    :param pred_bias:
+    :param pred_wei: weight for each entity dimension
+    :param pred_bias: bias weight
     :return: semantic function
     """
     def prob(ent):
@@ -32,21 +33,25 @@ def init_vec(pred_wei, C=None, max_value=0.5):
     """
     Return a reasonably sparse entity vector for a parameter vector 
     :param pred_wei: a predicate parameter vector
+    :param C: total cardinality
+    :param max_value: maximum value for each dimension
     :return: an entity vector
     """
     D = pred_wei.size
     if C is None:
-        C = np.ceil(D/20)
+        C = ceil(D/20)
     
     vec = np.zeros(D)
     nonzero = pred_wei.nonzero()[0]  # Indices on nonzero elements
     if nonzero.size * max_value > C:
-        max_indices = np.ceil(C/max_value)
+        # Just get the largest weights, if there are too many
+        max_indices = ceil(C/max_value)
         indices = np.argpartition(pred_wei, -max_indices)
         vec[indices[-max_indices+1:]] = max_value
         vec[indices[-max_indices]] = C - (max_indices-1)*max_value
         vec[np.argpartition(pred_wei, -C-1)[-C-1:]] = max_value
     else:
+        # Get all nonzero weights, if there are too few
         vec += (C - nonzero.size*max_value) / (D - nonzero.size) 
         vec[nonzero] = max_value
     return vec
@@ -117,13 +122,27 @@ def marginal(prob, C):
     intermed = pass_messages_up(prob, C)
     return pass_messages_down(prob, intermed, C)
 
+### Approximate marginals for cardinality potential
+
+def marginal_approx(prob, C):
+    """
+    Calculate approximate marginal probabilities, for a fixed cardinality
+    :param prob: probabilities of each unit, without cardinality potential
+    :param C: total cardinality
+    :return: marginal probabilities
+    """
+    total = prob.sum()
+    scaled = prob / total * C
+    # (To be safe we could check if any components are above 1
+    return scaled
+
 ### Optimisation
 
 def new_value(vec, semfunc, i, C):
     """
     Optimise the value of one component of the posterior, holding the rest fixed
     :param vec: current approximation of the posterior
-    :param sf: semantic function
+    :param semfunc: semantic function
     :param i: index of component to optimise
     :param C: total cardinality
     :return: new value for vec[i]
@@ -144,45 +163,85 @@ def new_value(vec, semfunc, i, C):
     # Optimal update (under our assumptions)
     return 1 / (1 + (D-C)/C * off_truth/on_truth)
 
-def update(vec, semfunc, C):
+def new_value_approx(vec, semfunc, i, C):
+    """
+    Optimise the value of one component of the posterior, holding the rest fixed,
+    and using a simple approximation for the marginals
+    :param vec: current approximation of the posterior
+    :param semfunc: semantic function
+    :param i: index of component to optimise
+    :param C: total cardinality
+    :return: new value for vec[i]
+    """
+    D = vec.size
+    # Vector with the unit switched off
+    off = np.copy(vec)
+    off[i] = 0
+    # Approximate marginal distributions when restricting the cardinality
+    off_marg = marginal_approx(off, C)
+    on_marg = marginal_approx(off, C-1)
+    on_marg[i] = 1
+    # Truth of the semantic function when applied to the mean entity vector
+    on_truth = semfunc(on_marg)
+    off_truth = semfunc(off_marg)
+    # Optimal update (under our assumptions)
+    return 1 / (1 + (D-C)/C * off_truth/on_truth)
+
+def update(vec, semfunc, C, new_value_fn):
     """
     Calculate probability of each unit, with the current mean field approximation,
     then calculate marginals with fixed cardinality.
     Repeat this separately for all units.
     :param vec: entity vector
-    :param pred: predicate index
+    :param semfunc: semantic function
     :param C: total cardinality
+    :param new_value_fn: function giving optimal updates for individual components
     :return: updated entity vector
     """
     new = np.copy(vec)
     # Update each component of the posterior
-    for i in semfunc.nonzero:
-        new[i] = new_value(new, semfunc, i, C)
     # Updates are identical for all components with zero weight
-    new[semfunc.zero] = new_value(new, semfunc, semfunc.zero[0], C)
+    new[semfunc.zero] = new_value_fn(new, semfunc, semfunc.zero[0], C)
+    # Update non-zero entries
+    for i in semfunc.nonzero:
+        new[i] = new_value_fn(new, semfunc, i, C)
     return new
 
-def mean_field(semfunc, N_iter, C, verbose=True):
+def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
     """
     Calculate the posterior distribution over entities, under a mean field approximation
     :param semfunc: semantic function
-    :param N_iter: number of iterations
     :param C: total cardinality
-    :return: entity vector
+    :param max_iter: stop after this number of iterations
+    :param delta: stop when the max difference between iterations is less than this
+    :param init_max_value: max value when initialising the vector
+    :param new_value_fn: function giving optimal updates for individual components
+    :param verbose: print summary information during descent
+    :return: mean field entity vector
     """
     # Initialise the entity vector
-    vec = init_vec(semfunc.wei, C)
+    vec = init_vec(semfunc.wei, C, max_value=init_max_value)
     if verbose:
         print('initial prob', semfunc(vec))
+        print('nonzero entries', len(semfunc.nonzero))
     # Optimise the entity vector
-    for _ in range(N_iter):
-        new = update(vec, semfunc, C)
+    for _ in range(max_iter):
+        new = update(vec, semfunc, C, new_value_fn=new_value_fn)
+        diff = np.abs(new - vec).max()
+        
         if verbose:
             print('diff inc', (new - vec).max())
             print('diff dec', (new - vec).min())
-            print('diff 000', np.abs(new.min() - vec.min()))
+            print('diff 000', new.min() - vec.min())
             print('min', new.min())
             print('max', new.max())
+            print('sum', new.sum())
             print('prob', semfunc(new))
+        
         vec = new
+        if diff < delta:
+            break
+    else:
+        print('max iter reached with delta {}'.format(diff))
+         
     return vec
