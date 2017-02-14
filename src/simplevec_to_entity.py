@@ -46,7 +46,7 @@ def get_entities(scale, C, target, name=None, prefix='multicore', thresh=5, dim=
     # Load model
     if verbose: print("Loading model")
     with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
-        all_vectors = pickle.load(f)    
+        all_vectors = pickle.load(f)
     # Multiply by the scale factor
     vec = all_vectors[pred_list] * scale
     del all_vectors  # Conserve memory
@@ -83,7 +83,7 @@ def get_entities(scale, C, target, name=None, prefix='multicore', thresh=5, dim=
     
     # Save to disk
     
-    with open(os.path.join(AUX_DIR, 'meanfield', fullname+'.pkl'), 'wb') as f:
+    with gzip.open(os.path.join(AUX_DIR, 'meanfield', fullname+'.pkl.gz'), 'wb') as f:
         pickle.dump(ent, f)
     
     return ent

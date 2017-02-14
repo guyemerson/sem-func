@@ -52,7 +52,7 @@ def save_scores(scores, subdir='simplevec'):
     with open(score_file, 'wb') as f:
         pickle.dump(scores, f)
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, gz=True):
+def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh):
     "Add new scores"
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
         # Ignore the summary file
@@ -68,9 +68,7 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, gz=True
             continue
         # Load and test the file
         print(filename)
-        if gz: open_fn = gzip.open
-        else: open_fn = open
-        with open_fn(os.path.join(AUX_DIR, subdir, filename), 'rb') as f:
+        with gzip.open(os.path.join(AUX_DIR, subdir, filename), 'rb') as f:
             vec = pickle.load(f)
         scores[settings] = test_all_simplevec(vec)
 
@@ -125,7 +123,7 @@ print(get_max(av_scores, [0,1,2,4], [(0, '400')]))
 
 
 mf_scores = get_scores('meanfield')
-add_scores(mf_scores, 'meanfield', gz=False)
+add_scores(mf_scores, 'meanfield')
 save_scores(mf_scores, 'meanfield')
 mf_av_scores = get_av_scores(mf_scores)
 
