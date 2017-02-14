@@ -4,7 +4,7 @@ from variational import get_semfunc, mean_field
 from testing import get_simlex_wordsim_preds
 from __config__.filepath import AUX_DIR
 
-def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None):
+def get_entities(scale, C, target, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None, skip_if_exists=True, verbose=False):
     """
     Get mean field entity vectors based on given parameter vectors
     Hyperparameters of binary-valued model:
@@ -12,6 +12,7 @@ def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a
     :param C: total cardinality
     :param target: desired energy for an 'untypical' vector
     Simple vector model to load:
+    :param name: name of model, as a string, or else use the following:
     :param prefix: name of dataset
     :param thresh: frequency threshold
     :param dim: number of dimensions (D/2)
@@ -24,9 +25,18 @@ def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a
     :return: {pred: entity vector}
     """
     # File names
-    name = '-'.join([str(x).replace('.','')
-                 for x in (prefix, thresh, dim, k, a, seed)])
-    fullname = name+'-{}-{}-{}'.format(scale, C, target)
+    if name is None:
+        name = '-'.join(str(x).replace('.','')
+                        for x in (prefix, thresh, dim, k, a, seed))
+    else:
+        prefix, thresh, dim, k, a, seed = name.split('-')
+        dim = int(dim)
+    fullname = name + '-' + '-'.join(str(x).replace('.','')
+                                 for x in (scale, C, target))
+    
+    # Skip if this setup has already been calculated
+    if skip_if_exists and os.path.exists(os.path.join(AUX_DIR, 'meanfield', fullname+'.pkl')):
+        return
     
     # Predicates to use
     if pred_list is None:
@@ -34,11 +44,12 @@ def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a
         pred_list = sorted(preds)
     
     # Load model
-    print("Loading model")
+    if verbose: print("Loading model")
     with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
         all_vectors = pickle.load(f)    
     # Multiply by the scale factor
     vec = all_vectors[pred_list] * scale
+    del all_vectors  # Conserve memory
     
     # Define bias of predicates
     
@@ -62,12 +73,12 @@ def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a
     
     # Calculate entity vectors
     
-    print("Calculating entity vectors")
+    if verbose: print("Calculating entity vectors")
     if mean_field_kwargs is None:
         mean_field_kwargs = {}
     ent = {}
     for i, sf in zip(pred_list, semfuncs):
-        print(i)
+        if verbose: print(i)
         ent[i] = mean_field(sf, C, **mean_field_kwargs)
     
     # Save to disk
@@ -79,13 +90,36 @@ def get_entities(scale, C, target, prefix='multicore', thresh=5, dim=400, k=0, a
 
 
 if __name__ == "__main__":
-    # Grid search over hyperparameters
     from itertools import product
-    scales = [0.5, 1, 2]
+    from multiprocessing import Pool
+    from random import shuffle
+    
+    # Grid search over hyperparameters
+    
+    scales = [0.5, 0.8, 1, 1.2]
     Cs = [20, 40, 80]
     targets = [10, 20, 40]
-    for s, C, t in product(scales, Cs, targets):
-        print('scale', s)
-        print('C', C)
-        print('target', t)
-        get_entities(1, 40, 10, mean_field_kwargs={"max_iter":500})
+    
+    grid = product(scales, Cs, targets)
+    
+    # Vector models
+    
+    simplevec = os.listdir(os.path.join(AUX_DIR, 'simplevec'))
+    simplevec_filtered = []
+    for name in simplevec:
+        parts = name.split('-')
+        if len(parts) != 6:
+            continue
+        prefix, thresh, dim, *_ = parts
+        if prefix == 'multicore' and thresh == '5' and dim == '400':
+            simplevec_filtered.append(name.split('.')[0])
+    
+    full_grid = list(product(grid, simplevec_filtered))
+    shuffle(full_grid)
+    
+    def train(hyper, simple):
+        print(hyper, simple)
+        get_entities(*hyper, name=simple, mean_field_kwargs={"max_iter":500})
+    
+    with Pool(4) as p:
+        p.starmap(train, full_grid)

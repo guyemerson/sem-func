@@ -1,5 +1,6 @@
 import numpy as np, pickle, os
 from scipy.stats import spearmanr
+from itertools import chain
 
 from __config__.filepath import AUX_DIR
 
@@ -108,6 +109,45 @@ def get_freq_lookup_dicts(pred_name, pred_freq):
         key = lambda i:pred_freq[i]
         freq_lookup[pos] = {lemma:max(inds, key=key) for lemma, inds in x_lookup.items()}
     return freq_lookup
+
+def load_freq_lookup_dicts(prefix, thresh):
+    """
+    Load part-of-speech-specific dicts mapping lemmas to the most frequent index
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :return: {'v':verb_dict, 'n':noun_dict}
+    """
+    # Load files
+    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_name = pickle.load(f)
+    with open(os.path.join(AUX_DIR, '{}-{}-freq.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_freq = pickle.load(f)
+    # Get lookup dictionaries
+    return get_freq_lookup_dicts(pred_name, pred_freq)
+
+def get_simlex_wordsim_preds(prefix, thresh):
+    """
+    Get the set of pred indices from simlex and wordsim
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :return: {pred indices}, {out-of-vocabulary items}
+    """
+    flookup = load_freq_lookup_dicts(prefix, thresh)
+    (n_pairs, _), (v_pairs, _), _ = get_simlex()
+    (sim_pairs, _), (rel_pairs, _) = get_wordsim()
+    
+    preds = set()
+    OOV = set()
+    
+    for pos, pairs in [('n', chain(n_pairs, sim_pairs, rel_pairs)), ('v', v_pairs)]:
+        for p in pairs:
+            for x in p:
+                try:
+                    preds.add(flookup[pos][x])
+                except KeyError:
+                    OOV.add(x)
+    
+    return preds, OOV 
 
 # Wrappers for similarity functions
 
