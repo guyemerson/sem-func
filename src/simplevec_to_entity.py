@@ -4,6 +4,52 @@ from variational import get_semfunc, mean_field
 from testing import get_simlex_wordsim_preds
 from __config__.filepath import AUX_DIR
 
+def get_semfuncs_from_vectors(name, scale, C, target, pred_list=None, as_dict=False):
+    """
+    Get semantic functions from given weights
+    :param name: name of parameter file
+    :param scale: factor to multiply simple vectors by
+    :param C: total cardinality
+    :param target: desired energy for an 'untypical' vector
+    :param pred_list: list of predicates to use
+    :param as_dict: return as a dict (default as a list)
+    :return: semantic functions
+    """
+    prefix, thresh, dim, *_ = name.split('-')
+    dim = int(dim)
+    # Predicates to use
+    if pred_list is None:
+        preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+        pred_list = sorted(preds)
+    # Load vectors
+    with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
+        all_vectors = pickle.load(f)
+    # Multiply by the scale factor
+    vec = all_vectors[pred_list] * scale
+    del all_vectors  # Conserve memory
+    
+    # Define bias of predicates
+    
+    # Number of dimensions in full space is double noun or verb space
+    D = dim * 2
+    # Maximum activation of each predicate
+    high = np.partition(vec, -C, axis=1)[:,-C:].sum(axis=1)
+    # Average activation if the top units are not used but still nouny/verby
+    other = (vec.sum(1) - high) / (D/2 - C) * C
+    # Minimum pred bias makes an average predicate have the target energy
+    bias = other + target
+    # For preds with a bigger gap between max and other activation,
+    # make the bias the average of the two
+    gap = high - other
+    mask = (gap > 2 * target)
+    bias[mask] = other[mask] + gap[mask] / 2
+    
+    # Define semantic functions
+    if as_dict:
+        return {i:get_semfunc(v,b) for i,v,b in zip(pred_list, vec, bias)}
+    else:
+        return [get_semfunc(v,b) for v,b in zip(vec, bias)]
+
 def get_entities(scale, C, target, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None, skip_if_exists=True, verbose=False):
     """
     Get mean field entity vectors based on given parameter vectors
@@ -45,31 +91,7 @@ def get_entities(scale, C, target, name=None, prefix='multicore', thresh=5, dim=
     
     # Load model
     if verbose: print("Loading model")
-    with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
-        all_vectors = pickle.load(f)
-    # Multiply by the scale factor
-    vec = all_vectors[pred_list] * scale
-    del all_vectors  # Conserve memory
-    
-    # Define bias of predicates
-    
-    # Number of dimensions in full space is double noun or verb space
-    D = dim * 2
-    # Maximum activation of each predicate
-    high = np.partition(vec, -C, axis=1)[:,-C:].sum(axis=1)
-    # Average activation if the top units are not used but still nouny/verby
-    other = (vec.sum(1) - high) / (D/2 - C) * C
-    # Minimum pred bias makes an average predicate have the target energy
-    bias = other + target
-    # For preds with a bigger gap between max and other activation,
-    # make the bias the average of the two
-    gap = high - other
-    mask = (gap > 2 * target)
-    bias[mask] = other[mask] + gap[mask] / 2
-    
-    # Define semantic functions
-    
-    semfuncs = [get_semfunc(v,b) for v,b in zip(vec, bias)]
+    semfuncs = get_semfuncs_from_vectors(name, scale, C, target, pred_list)
     
     # Calculate entity vectors
     

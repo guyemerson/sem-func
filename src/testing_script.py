@@ -3,6 +3,8 @@ import os, pickle, gzip, numpy as np
 from testing import get_test_all
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
+from simplevec_to_entity import get_semfuncs_from_vectors
+from variational import marginal_approx
 
 prefix = 'multicore'
 thresh = 5
@@ -12,9 +14,9 @@ test_all = get_test_all(prefix, thresh)
 
 # Semfunc model
 
-def test_all_semfunc(setup, *a, **kw):
+def test_all_semfunc(setup, **kw):
     "Test semfunc model on all datasets"
-    return test_all(setup.model.cosine_of_parameters, *a, **kw)
+    return test_all(setup.model.cosine_of_parameters, **kw)
 
 def load_and_test(prefix=prefix, thresh=thresh, name=name):
     "Load semfunc model and test it"
@@ -30,33 +32,54 @@ new = load_and_test()
 
 # Simple vector models
 
-def test_all_simplevec(vec, *a, **kw):
+def test_all_simplevec(vec, **kw):
     "Test vector model on all datasets"
     def sim(a,b):
         "Cosine similarity of vectors"
         return cosine(vec[a], vec[b])
-    return test_all(sim, *a, **kw)
+    return test_all(sim, **kw)
 
-def get_scores(subdir='simplevec'):
+def test_all_implies(vec, sf, op=None, **kw):
+    """
+    Test semfunc model on all datasets
+    :param vec: mean field posterior vectors
+    :param sf: semantic functions
+    :param op: how to combine the implications
+    :param **kw: additional keyword arguments passed to test_all function
+    :return: Spearman rank correlation results
+    """
+    if op is None:
+        import operator
+        op = operator.add
+    def sim(a,b):
+        "Combined truth of a=>b and b=>a"
+        return op(sf[a](vec[b]), sf[b](vec[a]))
+    return test_all(sim, **kw)
+
+def get_scores(subdir='simplevec', filename='scores'):
     "Get previously calculated scores"
-    score_file = os.path.join(AUX_DIR, subdir, 'scores.pkl')
+    score_file = os.path.join(AUX_DIR, subdir, filename) + '.pkl'
     try:
         with open(score_file, 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
         return {}
 
-def save_scores(scores, subdir='simplevec'):
+def save_scores(scores, subdir='simplevec', filename='scores'):
     "Get previously calculated scores"
-    score_file = os.path.join(AUX_DIR, subdir, 'scores.pkl')
+    score_file = os.path.join(AUX_DIR, subdir, filename) + '.pkl'
     with open(score_file, 'wb') as f:
         pickle.dump(scores, f)
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh):
+def float_with_point(s):
+    "Convert a setting from a string to a float (between 0 and 10)"
+    return float(s[0]+'.'+s[1:])
+
+def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', constr=(), **kw):
     "Add new scores"
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
-        # Ignore the summary file
-        if filename is 'scores.pkl':
+        # Ignore summary files
+        if filename.split('.')[-1] != 'gz':
             continue
         # Process filename
         settings = tuple(filename.split('.')[0].split('-'))
@@ -66,11 +89,25 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh):
         # Ignore files we've already evaluated
         if settings in scores:
             continue
-        # Load and test the file
+        # Ignore files that don't match the given constraints:
+        if any(settings[pos] not in [str(x).replace('.','') for x in val] for pos,val in constr):
+            continue
+        # Load the vectors
         print(filename)
         with gzip.open(os.path.join(AUX_DIR, subdir, filename), 'rb') as f:
             vec = pickle.load(f)
-        scores[settings] = test_all_simplevec(vec)
+        # Test according to chosen method
+        if method == 'simple':
+            scores[settings] = test_all_simplevec(vec, **kw)
+        elif method == 'implies':
+            name = '-'.join(settings[:6])
+            scale, C, target = settings[6:]
+            scale = float_with_point(scale)
+            C = int(C)
+            target = float(target)
+            vec = {i: marginal_approx(p, C) for i,p in vec.items()}
+            sf = get_semfuncs_from_vectors(name, scale, C, target, as_dict=True)
+            scores[settings] = test_all_implies(vec, sf, **kw)
 
 def get_av_scores(scores, seed_index=5):
     "Average over random seeds"
@@ -85,7 +122,7 @@ def get_av_scores(scores, seed_index=5):
         av_scores.setdefault(nonseed_settings, []).append(cor_arr)
     # Average scores
     for s, arrs in av_scores.items():
-        av_scores[s] = np.array(arrs).mean(0)
+        av_scores[s] = (len(arrs), np.array(arrs).mean(0))
     return av_scores
 
 def get_max(av_scores, pos, constr=()):
@@ -131,3 +168,22 @@ for i in [0,1,2,4]:
     print(get_max(mf_av_scores, i))
 print(get_max(mf_av_scores, [0,1,2,4]))
 
+
+import operator
+for op_name, op in [('add', operator.add),
+                    ('mul', operator.mul),
+                    ('min', min),
+                    ('max', max)]:
+    score_filename = 'scores_'+op_name
+    scores_op = get_scores('meanfield', score_filename)
+    add_scores(scores_op, 'meanfield', method='implies', op=op,
+               constr=[(3, [0]),
+                       (4, [0.6, 0.7, 0.75, 0.8]),
+                       (6, [0.8, 1, 1.2]),
+                       (7, [40, 80])])
+    save_scores(scores_op, 'meanfield', score_filename)
+    
+    av_scores_op = get_av_scores(scores_op)
+    for i in [0,1,2,4]:
+        print(get_max(av_scores_op, i))
+    print(get_max(av_scores_op, [0,1,2,4]))
