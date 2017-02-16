@@ -106,7 +106,7 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             C = int(C)
             target = float(target)
             vec = {i: marginal_approx(p, C) for i,p in vec.items()}
-            sf = get_semfuncs_from_vectors(name, scale, C, target, as_dict=True)
+            sf = get_semfuncs_from_vectors(name, 'target', scale, C, target, as_dict=True)
             scores[settings] = test_all_implies(vec, sf, **kw)
 
 def get_av_scores(scores, seed_index=5):
