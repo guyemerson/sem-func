@@ -1,6 +1,6 @@
-import os, pickle, gzip, numpy as np
+import os, pickle, gzip, numpy as np, operator
 
-from testing import get_test_all
+from testing import get_test_all, get_simlex_wordsim_preds
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
 from simplevec_to_entity import get_semfuncs_from_vectors
@@ -75,8 +75,13 @@ def float_with_point(s):
     "Convert a setting from a string to a float (between 0 and 10)"
     return float(s[0]+'.'+s[1:])
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', constr=(), **kw):
+def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), **kw):
     "Add new scores"
+    # Load preds
+    preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+    pred_list = sorted(preds)
+    
+    prev_name = None  # Avoid reloading vectors
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
         # Ignore summary files
         if filename.split('.')[-1] != 'gz':
@@ -101,13 +106,31 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             scores[settings] = test_all_simplevec(vec, **kw)
         elif method == 'implies':
             name = '-'.join(settings[:6])
-            scale, C, target = settings[6:]
+            # Load vectors
+            if name != prev_name:
+                with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
+                    all_vectors = pickle.load(f)
+                vectors = all_vectors[pred_list]
+                del all_vectors
+            if bias_method == 'target':
+                scale, C, target = settings[6:]
+                target = float(target)
+                hyper = {'target': target}
+            elif bias_method == 'frequency':
+                scale, C, Z, alpha = settings[6:]
+                Z = float_with_point(Z)
+                alpha = float_with_point(alpha)
+                hyper = {'Z': Z, 'alpha': alpha}
+            else:
+                raise ValueError('bias method not recognised')
             scale = float_with_point(scale)
             C = int(C)
-            target = float(target)
+            hyper['scale'] = scale
+            hyper['C'] = C
             vec = {i: marginal_approx(p, C) for i,p in vec.items()}
-            sf = get_semfuncs_from_vectors(name, 'target', scale, C, target, as_dict=True)
+            sf = get_semfuncs_from_vectors(name, bias_method, as_dict=True, pred_list=pred_list, vectors=vectors, **hyper)
             scores[settings] = test_all_implies(vec, sf, **kw)
+            prev_name = name
 
 def get_av_scores(scores, seed_index=5):
     "Average over random seeds"
@@ -138,12 +161,12 @@ def get_max(av_scores, pos, constr=()):
         if any(s[i] != v for i,v in constr):
             return 0
         elif isinstance(pos, (list, tuple)):
-            return sum(av_scores[s][p] for p in pos)
+            return sum(av_scores[s][1][p] for p in pos)
         else:
-            return av_scores[s][pos]
+            return av_scores[s][1][pos]
     # Get the best hyperparameters
     best = max(av_scores, key=key)
-    return best, av_scores[best][pos]
+    return best, av_scores[best][1][pos]
 
 scores = get_scores()
 add_scores(scores)
@@ -169,7 +192,6 @@ for i in [0,1,2,4]:
 print(get_max(mf_av_scores, [0,1,2,4]))
 
 
-import operator
 for op_name, op in [('add', operator.add),
                     ('mul', operator.mul),
                     ('min', min),
@@ -182,6 +204,21 @@ for op_name, op in [('add', operator.add),
                        (6, [0.8, 1, 1.2]),
                        (7, [40, 80])])
     save_scores(scores_op, 'meanfield', score_filename)
+    
+    av_scores_op = get_av_scores(scores_op)
+    for i in [0,1,2,4]:
+        print(get_max(av_scores_op, i))
+    print(get_max(av_scores_op, [0,1,2,4]))
+
+
+for op_name, op in [('add', operator.add),
+                    ('mul', operator.mul),
+                    ('min', min),
+                    ('max', max)]:
+    score_filename = 'scores_'+op_name
+    scores_op = get_scores('meanfield_freq', score_filename)
+    add_scores(scores_op, 'meanfield_freq', method='implies', bias_method='frequency', op=op)
+    save_scores(scores_op, 'meanfield_freq', score_filename)
     
     av_scores_op = get_av_scores(scores_op)
     for i in [0,1,2,4]:

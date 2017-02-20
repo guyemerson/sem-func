@@ -26,7 +26,7 @@ def get_verb_noun_freq(prefix='multicore', thresh=5, pred_list=None):
     else:
         return freq[pred_list]
 
-def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, as_dict=False):
+def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, as_dict=False):
     """
     Get semantic functions from given weights
     :param name: name of parameter file
@@ -34,7 +34,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     :param scale: factor to multiply simple vectors by
     :param C: total cardinality
     :param target: desired energy for an 'untypical' vector (only for bias method 'target')
-    :param Z: normalisation constant for predicate truth (only for bias method 'frequency')
+    :param Z: weighted predicate truth of rest of vocabulary (only for bias method 'frequency')
     :param alpha: smoothing of frequency in generation (only for bias method 'frequency')
     :param pred_list: list of predicates to use
     :param as_dict: return as a dict (default as a list)
@@ -47,11 +47,13 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
         preds, _ = get_simlex_wordsim_preds(prefix, thresh)
         pred_list = sorted(preds)
     # Load vectors
-    with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
-        all_vectors = pickle.load(f)
+    if vectors is None:
+        with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
+            all_vectors = pickle.load(f)
+        vectors = all_vectors[pred_list]
+        del all_vectors  # Conserve memory
     # Multiply by the scale factor
-    vec = all_vectors[pred_list] * scale
-    del all_vectors  # Conserve memory
+    vec = vectors * scale
     
     # Define bias of predicates
     
@@ -69,10 +71,10 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
         bias[mask] = other[mask] + gap[mask] / 2
     
     elif bias_method == 'frequency':
-        # freq[i] ~ 1/Z freq[i]^alpha semfunc[i](ent) 
+        # freq[i] ~ freq[i]^alpha / (Z + freq[i]^alpha) semfunc[i](ent) 
         freq = get_verb_noun_freq(prefix, thresh, pred_list)
         ent = np.ones(dim * 2) * C/dim
-        bias = np.dot(vec, ent) + np.log(freq**(alpha-1) / Z - 1)
+        bias = np.dot(vec, ent) + np.log(1 / freq / (1 + Z * freq ** -alpha) - 1)
     
     else:
         raise ValueError('bias method not recognised')
@@ -123,7 +125,7 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
                                          for x in (scale, C, Z, alpha))
     
     # Skip if this setup has already been calculated
-    if skip_if_exists and os.path.exists(os.path.join(AUX_DIR, output_dir, fullname+'.pkl')):
+    if skip_if_exists and os.path.exists(os.path.join(AUX_DIR, output_dir, fullname+'.pkl.gz')):
         return
     
     # Predicates to use
@@ -188,5 +190,5 @@ if __name__ == "__main__":
         print(hyper, simple)
         get_entities(*hyper, name=simple, mean_field_kwargs={"max_iter":500}, output_dir='meanfield_freq')
     
-    with Pool(4) as p:
+    with Pool(12) as p:
         p.starmap(train, full_grid)
