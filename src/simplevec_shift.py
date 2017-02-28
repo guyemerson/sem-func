@@ -6,10 +6,10 @@ from utils import is_verb
 
 dataset = 'multicore-5'
 D = 400  # Number of dimensions for nouns and verbs (separately) 
-seed = 32
+seed_range = [32, 8, 91, 64, 97]
 
-a_range = [0.75, 0.8]  # Power that frequencies are raised to under the null hypothesis
-k_range = [0.5, 0.8, 1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2, 2.3, 2.6, 3]
+a_range = [0.75, 0.8, 0.9, 1]  # Power that frequencies are raised to under the null hypothesis
+k_range = [0]
 
 # Load files
 
@@ -18,11 +18,6 @@ with open('/anfs/bigdisc/gete2/wikiwoods/{}-vocab.pkl'.format(dataset), 'rb') as
 verb = np.array([is_verb(p) for p in pred_name], dtype='bool')
 
 full_template = '/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-{}-{}.pkl.gz'
-
-with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
-    count_vec = pickle.load(f)
-
-template = full_template.format(dataset, D, '{}-{}', seed)
     
 # Calculate PPMI
 def ppmi(vec, a):
@@ -52,17 +47,24 @@ def ppmi(vec, a):
     new.clip(0, out=vec)
     return new
 
-for a in a_range:
-    print(a)
-    vec = ppmi(count_vec, a)
-
-    # Shift and save
+for seed in seed_range:
     
-    for k in k_range:
-        filename = template.format(str(k).replace('.',''),
-                                   str(a).replace('.',''))
-        if os.path.exists(filename): continue
-        print(k)
-        new = (vec - k).clip(0)
-        with gzip.open(filename, 'wb') as f:
-            pickle.dump(new, f)
+    with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
+        count_vec = pickle.load(f)
+    
+    template = full_template.format(dataset, D, '{}-{}', seed)
+    
+    for a in a_range:
+        print(a)
+        vec = ppmi(count_vec, a)
+    
+        # Shift and save
+        
+        for k in k_range:
+            filename = template.format(str(k).replace('.',''),
+                                       str(a).replace('.',''))
+            if os.path.exists(filename): continue
+            print(k)
+            new = (vec - k).clip(0)
+            with gzip.open(filename, 'wb') as f:
+                pickle.dump(new, f)
