@@ -1,6 +1,6 @@
 import os, pickle, gzip, numpy as np, operator
 
-from testing import get_test_all, get_simlex_wordsim_preds
+from testing import get_test_simlex_wordsim, get_simlex_wordsim_preds #, get_test_all
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
 from simplevec_to_entity import get_semfuncs_from_vectors
@@ -10,7 +10,10 @@ prefix = 'multicore'
 thresh = 5
 name = 'example'
 
-test_all = get_test_all(prefix, thresh)
+test_all = get_test_simlex_wordsim(prefix, thresh)
+
+preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+pred_list = sorted(preds)
 
 # Semfunc model
 
@@ -28,7 +31,7 @@ def load_and_test(prefix=prefix, thresh=thresh, name=name):
     test_all_semfunc(new)
     return new
 
-new = load_and_test()
+#new = load_and_test()
 
 # Simple vector models
 
@@ -49,12 +52,18 @@ def test_all_implies(vec, sf, op=None, **kw):
     :return: Spearman rank correlation results
     """
     if op is None:
-        import operator
         op = operator.add
     def sim(a,b):
         "Combined truth of a=>b and b=>a"
         return op(sf[a](vec[b]), sf[b](vec[a]))
     return test_all(sim, **kw)
+
+def implies_self(vec, sf):
+    "Test each semantic function on its own meanfield vector"
+    prob = [sf[p](vec[p]) for p in pred_list]
+    av = sum(prob)/len(prob)
+    print(av)
+    return av
 
 def get_scores(subdir='simplevec', filename='scores'):
     "Get previously calculated scores"
@@ -75,12 +84,15 @@ def float_with_point(s):
     "Convert a setting from a string to a float (between 0 and 10)"
     return float(s[0]+'.'+s[1:])
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), **kw):
+def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), test_fn=None, **kw):
     "Add new scores"
-    # Load preds
-    preds, _ = get_simlex_wordsim_preds(prefix, thresh)
-    pred_list = sorted(preds)
-    
+    # Choose test function
+    if test_fn is None:
+        if method == 'simple':
+            test_fn = test_all_simplevec
+        elif method == 'implies':
+            test_fn = test_all_implies
+    # Process each file
     prev_name = None  # Avoid reloading vectors
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
         # Ignore summary files
@@ -103,7 +115,7 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             vec = pickle.load(f)
         # Test according to chosen method
         if method == 'simple':
-            scores[settings] = test_all_simplevec(vec, **kw)
+            scores[settings] = test_fn(vec, **kw)
         elif method == 'implies':
             name = '-'.join(settings[:6])
             # Load vectors
@@ -127,9 +139,9 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             C = int(C)
             hyper['scale'] = scale
             hyper['C'] = C
-            vec = {i: marginal_approx(p, C) for i,p in vec.items()}
+            norm_vec = {i: marginal_approx(p, C) for i,p in vec.items()}
             sf = get_semfuncs_from_vectors(name, bias_method, as_dict=True, pred_list=pred_list, vectors=vectors, **hyper)
-            scores[settings] = test_all_implies(vec, sf, **kw)
+            scores[settings] = test_fn(norm_vec, sf, **kw)
             prev_name = name
 
 def get_av_scores(scores, seed_index=5):
@@ -146,6 +158,20 @@ def get_av_scores(scores, seed_index=5):
     # Average scores
     for s, arrs in av_scores.items():
         av_scores[s] = (len(arrs), np.array(arrs).mean(0))
+    return av_scores
+
+def get_av_probs(scores, seed_index=5):
+    "Average over random seeds"
+    av_scores = {}
+    # Group scores
+    for settings, prob in scores.items():
+        # Filter seed from settings
+        nonseed_settings = settings[:seed_index] + settings[seed_index+1:]
+        # Append correlations to list (initialising if necessary)
+        av_scores.setdefault(nonseed_settings, []).append(prob)
+    # Average scores
+    for s, probs in av_scores.items():
+        av_scores[s] = (len(probs), sum(probs)/len(probs))
     return av_scores
 
 def get_max(av_scores, pos, constr=()):
@@ -167,6 +193,15 @@ def get_max(av_scores, pos, constr=()):
     # Get the best hyperparameters
     best = max(av_scores, key=key)
     return best, av_scores[best][1][pos]
+
+def harm(x,y):
+    """Harmonic mean of x and y"""
+    return x*y/(x+y)
+
+def prop(x,y):
+    """Combine P(a|b) and P(b|a) to P(a and b|a or b)"""
+    return 1 / (1/x + 1/y - 1)
+
 
 scores = get_scores()
 add_scores(scores)
@@ -191,11 +226,18 @@ for i in [0,1,2,4]:
     print(get_max(mf_av_scores, i))
 print(get_max(mf_av_scores, [0,1,2,4]))
 
+self_prob = get_scores('meanfield_freq', 'self_prob')
+add_scores(self_prob, 'meanfield_freq', method='implies', bias_method='frequency', test_fn=implies_self)
+save_scores(self_prob, 'meanfield_freq', 'self_prob')
+av_self_prob = get_av_probs(self_prob)
+
 
 for op_name, op in [('add', operator.add),
                     ('mul', operator.mul),
                     ('min', min),
-                    ('max', max)]:
+                    ('max', max),
+                    ('harm', harm),
+                    ('prop', prop)]:
     score_filename = 'scores_'+op_name
     scores_op = get_scores('meanfield', score_filename)
     add_scores(scores_op, 'meanfield', method='implies', op=op,
@@ -214,13 +256,16 @@ for op_name, op in [('add', operator.add),
 for op_name, op in [('add', operator.add),
                     ('mul', operator.mul),
                     ('min', min),
-                    ('max', max)]:
+                    ('max', max),
+                    ('harm', harm),
+                    ('prop', prop)]:
     score_filename = 'scores_'+op_name
     scores_op = get_scores('meanfield_freq', score_filename)
     add_scores(scores_op, 'meanfield_freq', method='implies', bias_method='frequency', op=op)
     save_scores(scores_op, 'meanfield_freq', score_filename)
     
     av_scores_op = get_av_scores(scores_op)
+    print(op_name, 'best:')
     for i in [0,1,2,4]:
         print(get_max(av_scores_op, i))
-    print(get_max(av_scores_op, [0,1,2,4]))
+    print(get_max(av_scores_op, [0,1,2]))

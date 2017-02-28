@@ -56,9 +56,9 @@ def get_wordsim():
     Get WordSim-353 data (separated into similarity and relatedness subsets)
     :return: (sim_pairs, sim_scores), (rel_pairs, rel_scores)
     """
-    with open('/homes/gete2/git/sem-func/data/wordsim353_sim_rel/wordsim_similarity_goldstandard.txt') as f:
+    with open('../data/wordsim353_sim_rel/wordsim_similarity_goldstandard.txt') as f:
         ws_sim = [line.strip().split('\t') for line in f]
-    with open('/homes/gete2/git/sem-func/data/wordsim353_sim_rel/wordsim_relatedness_goldstandard.txt') as f:
+    with open('../data/wordsim353_sim_rel/wordsim_relatedness_goldstandard.txt') as f:
         ws_rel = [line.strip().split('\t') for line in f]
     sim_pairs = [(x[0], x[1]) for x in ws_sim]
     rel_pairs = [(x[0], x[1]) for x in ws_rel]
@@ -66,6 +66,40 @@ def get_wordsim():
     rel_scores = np.array([float(x[2]) for x in ws_rel])
     
     return (sim_pairs, sim_scores), (rel_pairs, rel_scores)
+
+def get_men():
+    """
+    Get MEN data (noun pairs only)
+    :return: (pairs, scores)
+    """
+    noun_pairs = []
+    noun_scores = []
+    with open('../data/MEN/MEN_dataset_lemma_form_full') as f:
+        for line in f:
+            # Only get pairs that are both nouns (2005 pairs)
+            # This excludes: 29 pairs that are both verbs, 96 both adjectives, 870 mixed part-of-speech
+            first, second, score = line.split()
+            lemma1, pos1 = first.split('-')
+            lemma2, pos2 = second.split('-')
+            if pos1 == 'n' and pos2 == 'n':
+                noun_pairs.append((lemma1, lemma2))
+                noun_scores.append(float(score))
+    noun_scores = np.array(noun_scores)
+    return (noun_pairs, noun_scores)
+
+def get_simverb():
+    """
+    Get SimVerb-3500 data
+    :return: (pairs, scores)
+    """
+    simverb = []
+    with open('../data/SimVerb-3500/SimVerb-3500.txt') as f:
+        f.readline()  # first line is headings
+        for line in f:
+            simverb.append(line.strip().split('\t'))
+    all_pairs = [(x[0], x[1]) for x in simverb]
+    all_scores = np.array([float(x[3]) for x in simverb])
+    return (all_pairs, all_scores)
 
 # Lookup
 
@@ -140,6 +174,33 @@ def get_simlex_wordsim_preds(prefix, thresh):
     OOV = set()
     
     for pos, pairs in [('n', chain(n_pairs, sim_pairs, rel_pairs)), ('v', v_pairs)]:
+        for p in pairs:
+            for x in p:
+                try:
+                    preds.add(flookup[pos][x])
+                except KeyError:
+                    OOV.add(x)
+    
+    return preds, OOV 
+
+def get_test_preds(prefix, thresh):
+    """
+    Get the set of pred indices from all test datasets
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :return: {pred indices}, {out-of-vocabulary items}
+    """
+    flookup = load_freq_lookup_dicts(prefix, thresh)
+    (n_pairs, _), (v_pairs, _), _ = get_simlex()
+    (sim_pairs, _), (rel_pairs, _) = get_wordsim()
+    men_pairs, _ = get_men()
+    verb_pairs, _ = get_simverb()
+    
+    preds = set()
+    OOV = set()
+    
+    for pos, pairs in [('n', chain(n_pairs, sim_pairs, rel_pairs, men_pairs)),
+                       ('v', chain(v_pairs, verb_pairs))]:
         for p in pairs:
             for x in p:
                 try:
@@ -240,7 +301,26 @@ def compare(old, new, pairs, gold=None, n=20, direction='both'):
 
 # Evaluation with specific lookup
 
-def get_test_all(prefix, thresh):
+def filter_common(freq, lookup, pairs, scores, threshold=1000):
+    """
+    Keep only those pairs whose frequencies are above the threshold
+    :param freq: array of frequencies of predicates
+    :param lookup: dict mapping strings to predicate indices
+    :param pairs: list of pairs of strings
+    :param scores: list of scores
+    :param threshold: minimum frequency to keep a predicate
+    """
+    common = ([], [])
+    for pair, score in zip(pairs, scores):
+        try:
+            if all(freq[lookup.get(x,'')] >= 1000 for x in pair):
+                common[0].append(pair)
+                common[1].append(score)
+        except IndexError:  # a string could not be found (so we try freq['']) 
+            pass
+    return common
+
+def get_test_simlex_wordsim(prefix, thresh):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
@@ -257,11 +337,7 @@ def get_test_all(prefix, thresh):
     simlex = get_simlex()
     wordsim = get_wordsim()
     # Get common pairs in SimLex
-    simlex_common = ([], [])
-    for pair, score in zip(*simlex[0]):
-        if all(pred_freq[freq_lookup['n'].get(x,0)] > 1000 for x in pair):
-            simlex_common[0].append(pair)
-            simlex_common[1].append(score)
+    simlex_common = filter_common(pred_freq, freq_lookup['n'], *simlex[0])
     # Define the testing function
     def test_all(sim, ret=True):
         """
@@ -283,5 +359,59 @@ def get_test_all(prefix, thresh):
         print('cmn.:', c)
         if ret:
             return n, v, s, r, c
+    
+    return test_all
+
+def get_test_all(prefix, thresh):
+    """
+    Get a testing function for a specific pred lookup
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    """
+    # Load files
+    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_name = pickle.load(f)
+    with open(os.path.join(AUX_DIR, '{}-{}-freq.pkl'.format(prefix,thresh)), 'rb') as f:
+        pred_freq = pickle.load(f)
+    # Get lookup dictionaries
+    freq_lookup = get_freq_lookup_dicts(pred_name, pred_freq)
+    # Get datasets
+    simlex = get_simlex()
+    wordsim = get_wordsim()
+    men = get_men()
+    simverb = get_simverb()
+    # Get common pairs in SimLex, MEN, and SimVerb
+    simlex_common = filter_common(pred_freq, freq_lookup['n'], *simlex[0])
+    men_common = filter_common(pred_freq, freq_lookup['n'], *men)
+    simverb_common = filter_common(pred_freq, freq_lookup['v'], *simverb)
+    # Define the testing function
+    def test_all(sim, ret=True):
+        """
+        Test the similarity function on all datasets
+        :param sim: function mapping pairs of predicate indices to similarity scores
+        :param ret: set True to return the scores
+        """
+        n_sim = with_lookup(sim, freq_lookup['n'])
+        v_sim = with_lookup(sim, freq_lookup['v'])
+        sl_n = evaluate(n_sim, *simlex[0])
+        sl_v = evaluate(v_sim, *simlex[1])
+        ws_s = evaluate(n_sim, *wordsim[0])
+        ws_r = evaluate(n_sim, *wordsim[1])
+        mn   = evaluate(n_sim, *men)
+        sv   = evaluate(v_sim, *simverb)
+        sl_c = evaluate(n_sim, *simlex_common)
+        mn_c = evaluate(n_sim, *men_common)
+        sv_c = evaluate(v_sim, *simverb_common)
+        print('sl noun:', sl_n)
+        print('sl verb:', sl_v)
+        print('ws sim.:', ws_s)
+        print('ws rel.:', ws_r)
+        print('men nn.:', mn)
+        print('simverb:', sv)
+        print('sl cmn.:', sl_c)
+        print('mn cmn.:', mn_c)
+        print('sv cmn.:', sv_c)
+        if ret:
+            return sl_n, sl_v, ws_s, ws_r, mn, sv, sl_c, mn_c, sv_c
     
     return test_all
