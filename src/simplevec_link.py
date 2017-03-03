@@ -1,11 +1,16 @@
-import os, pickle, gzip, numpy as np
-from scipy.special import expit
+import os, pickle, gzip, numpy as np, argparse
 
 from __config__.filepath import AUX_DIR
 
+# Command line options
+
+parser = argparse.ArgumentParser(description="Fit link weights")
+parser.add_argument('filename')
+args = parser.parse_args()
+
 # Parameters
 
-filename = 'multicore-5-400-0-08-91-1-40-0001-08'
+filename = args.filename
 
 hyp = filename.split('-')
 D = int(hyp[2])*2
@@ -20,32 +25,24 @@ with gzip.open(os.path.join(AUX_DIR, 'meanfield_freq_all', filename+'.pkl.gz'), 
 
 # Sum over tuples
 
-with open(os.path.join(AUX_DIR, 'multicore-5-count_tuple.pkl'), 'rb') as f:
-    count = pickle.load(f)
+with open(os.path.join(AUX_DIR, 'multicore-5-count_pairs.pkl'), 'rb') as f:
+    pairs = pickle.load(f)
 
-print(len(count), "tuples in total")
+print(len(pairs[0])+len(pairs[1]), "pairs in total")
 
 link_total = np.zeros((2, D, D))
 
-n_ag = 0
-n_pat = 0
+n_total = [0,0]
 
 # Add connections from each tuple
-for i, (triple, n) in enumerate(count.items()):
-    print(i)
-    if len(triple) == 2:  # Skip _be_v_id pairs
-        continue
-    v, ag, pat = triple
-    if ag is not None:
-        n_ag += n
-        link_total[0] += n * np.outer(ent[v], ent[ag])
-    if pat is not None:
-        n_pat += n
-        link_total[1] += n * np.outer(ent[v], ent[pat])
+for label, label_pairs in enumerate(pairs):
+    for i, ((verb, noun), n) in enumerate(label_pairs.items()):
+        link_total[label] += n * np.outer(ent[verb], ent[noun])
+        n_total[label] += n
 
 # Normalise to frequencies
-link_total[0] /= n_ag
-link_total[1] /= n_pat
+link_total[0] /= n_total[0]
+link_total[1] /= n_total[1]
 
 # Take ppmi
 link_wei = np.log(link_total) - 2 * np.log(C/D)

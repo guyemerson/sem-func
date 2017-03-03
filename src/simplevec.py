@@ -1,5 +1,7 @@
-import pickle, gzip, numpy as np
+import pickle, gzip, os, numpy as np
 from collections import defaultdict
+
+from __config__.filepath import AUX_DIR
 
 # Hyperparameters
 
@@ -24,10 +26,10 @@ get_bin = defaultdict(rand_bin)
 
 print('loading')
 
-with open('/anfs/bigdisc/gete2/wikiwoods/{}-count_tuple.pkl'.format(dataset), 'rb') as f:
+with open(os.path.join(AUX_DIR, '{}-count_tuple.pkl'.format(dataset)), 'rb') as f:
     count = pickle.load(f)
 
-with open('/anfs/bigdisc/gete2/wikiwoods/{}-vocab.pkl'.format(dataset), 'rb') as f:
+with open(os.path.join(AUX_DIR, '{}-vocab.pkl'.format(dataset)), 'rb') as f:
     pred_name = pickle.load(f)
 V = len(pred_name)
 
@@ -54,12 +56,13 @@ for graph, n in sorted(count.items(), key=lambda x:tuple(y if y is not None else
         if o is not None:
             vec[v, get_bin[o,'o']+D] += n
             vec[o, get_bin[v,'o']] += n
+# TODO include subject-object contexts?
 
 # Save
 
 print('saving')
 
-template = '/anfs/bigdisc/gete2/wikiwoods/simplevec/{}-{}-full-{}.pkl.gz'
+template = os.path.join(AUX_DIR, 'simplevec', '{}-{}-full-{}.pkl.gz')
 
 with gzip.open(template.format(dataset, D, seed), 'wb') as f:
     pickle.dump(vec, f)
