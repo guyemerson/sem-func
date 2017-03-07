@@ -138,7 +138,7 @@ def marginal_approx(prob, C):
 
 ### Optimisation
 
-def new_value(vec, semfunc, i, C):
+def new_value(vec, semfunc, i, C, prob_ratio=None):
     """
     Optimise the value of one component of the posterior, holding the rest fixed
     :param vec: current approximation of the posterior
@@ -160,10 +160,14 @@ def new_value(vec, semfunc, i, C):
     # Truth of the semantic function when applied to the mean entity vector
     on_truth = semfunc(on_marg)
     off_truth = semfunc(off_marg)
+    factor = on_truth/off_truth
+    # If potentials are given, modify the ratio
+    if prob_ratio is not None:
+        factor *= prob_ratio[i]
     # Optimal update (under our assumptions)
-    return 1 / (1 + (D-C)/C * off_truth/on_truth)
+    return 1 / (1 + (D-C)/(C * factor))
 
-def new_value_approx(vec, semfunc, i, C):
+def new_value_approx(vec, semfunc, i, C, prob_ratio=None):
     """
     Optimise the value of one component of the posterior, holding the rest fixed,
     and using a simple approximation for the marginals
@@ -171,6 +175,7 @@ def new_value_approx(vec, semfunc, i, C):
     :param semfunc: semantic function
     :param i: index of component to optimise
     :param C: total cardinality
+    :param prob_ratio: ratio of probabilities of each each dimension being on or off
     :return: new value for vec[i]
     """
     D = vec.size
@@ -184,10 +189,14 @@ def new_value_approx(vec, semfunc, i, C):
     # Truth of the semantic function when applied to the mean entity vector
     on_truth = semfunc(on_marg)
     off_truth = semfunc(off_marg)
+    factor = on_truth/off_truth
+    # If potentials are given, modify the ratio
+    if prob_ratio is not None:
+        factor *= prob_ratio[i]
     # Optimal update (under our assumptions)
-    return 1 / (1 + (D-C)/C * off_truth/on_truth)
+    return 1 / (1 + (D-C)/(C * factor))
 
-def update(vec, semfunc, C, new_value_fn):
+def update(vec, semfunc, C, new_value_fn, prob_ratio=None):
     """
     Calculate probability of each unit, with the current mean field approximation,
     then calculate marginals with fixed cardinality.
@@ -201,10 +210,20 @@ def update(vec, semfunc, C, new_value_fn):
     new = np.copy(vec)
     # Update each component of the posterior
     # Updates are identical for all components with zero weight
-    new[semfunc.zero] = new_value_fn(new, semfunc, semfunc.zero[0], C)
+    # If prob_ratio is given, we also need to make sure these components have the same value
+    if prob_ratio is None:
+        zero = semfunc.zero
+        nonzero = semfunc.nonzero
+    else:
+        zero_bool = (semfunc.wei == 0) * (prob_ratio == prob_ratio.min())
+        zero = zero_bool.nonzero()[0]
+        nonzero = np.invert(zero_bool).nonzero()[0]
+    
+    if zero.size:
+        new[zero] = new_value_fn(new, semfunc, zero[0], C, prob_ratio=prob_ratio)
     # Update non-zero entries
-    for i in semfunc.nonzero:
-        new[i] = new_value_fn(new, semfunc, i, C)
+    for i in nonzero:
+        new[i] = new_value_fn(new, semfunc, i, C, prob_ratio=prob_ratio)
     return new
 
 def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
@@ -245,3 +264,63 @@ def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_va
         print('max iter reached with delta {}'.format(diff))
          
     return vec
+
+def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
+    """
+    Calculate the posterior distribution over entities, under a mean field approximation,
+    for a VSO triple
+    :param semfuncs: semantic functions (verb, agent, patient)
+    :param link_wei: link weights
+    :param ent_bias: bias for invididual dimensions
+    :param C: total cardinality
+    :param max_iter: stop after this number of iterations
+    :param delta: stop when the max difference between iterations is less than this
+    :param init_max_value: max value when initialising the vector
+    :param new_value_fn: function giving optimal updates for individual components
+    :param verbose: print summary information during descent
+    :return: mean field entity vector
+    """
+    names = ['verb','agent','patient']
+    # Initialise the entity vector
+    vecs = [init_vec(sf.wei, C, max_value=init_max_value) for sf in semfuncs]
+    if verbose:
+        for nm, sf, v in zip(names, semfuncs, vecs):
+            print(nm)
+            print('\tinitial prob', sf(v))
+            print('\tnonzero entries', len(sf.nonzero))
+    # Optimise the entity vector
+    for _ in range(max_iter):
+        max_diff = 0
+        for i in range(3):
+            if verbose:
+                print(names[i])
+            v = vecs[i]
+            sf = semfuncs[i]
+            # Get probability ratio from link weights
+            if i == 0:
+                prob_ratio = np.exp(np.dot(link_wei[0], vecs[1]) + np.dot(link_wei[1], vecs[2]) - ent_bias)
+            elif i == 1:
+                prob_ratio = np.exp(np.dot(vecs[0], link_wei[0]) - ent_bias)
+            elif i == 2:
+                prob_ratio = np.exp(np.dot(vecs[0], link_wei[1]) - ent_bias)
+            # Update the vector
+            new = update(v, sf, C, new_value_fn=new_value_fn, prob_ratio=prob_ratio)
+            diff = np.abs(new - v).max()
+            
+            if verbose:
+                print('diff inc', (new - v).max())
+                print('diff dec', (new - v).min())
+                print('diff 000', new.min() - v.min())
+                print('min', new.min())
+                print('max', new.max())
+                print('sum', new.sum())
+                print('prob', sf(new))
+            
+            vecs[i] = new
+            max_diff = max(diff, max_diff)
+        if max_diff < delta:
+            break
+    else:
+        print('max iter reached with delta {}'.format(diff))
+         
+    return vecs
