@@ -26,7 +26,7 @@ def get_verb_noun_freq(prefix='multicore', thresh=5, pred_list=None):
     else:
         return freq[pred_list]
 
-def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, as_dict=False):
+def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, as_dict=False, directory='simplevec'):
     """
     Get semantic functions from given weights
     :param name: name of parameter file
@@ -48,7 +48,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
         pred_list = sorted(preds)
     # Load vectors
     if vectors is None:
-        with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
+        with gzip.open(os.path.join(AUX_DIR, directory, name+'.pkl.gz'), 'rb') as f:
             all_vectors = pickle.load(f)
         vectors = all_vectors[pred_list]
         del all_vectors  # Conserve memory
@@ -85,7 +85,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     else:
         return [get_semfunc(v,b) for v,b in zip(vec, bias)]
 
-def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None, output_dir='meanfield', skip_if_exists=True, verbose=False):
+def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None, output_dir='meanfield', input_dir='simplevec', skip_if_exists=True, verbose=False):
     """
     Get mean field entity vectors based on given parameter vectors
     Hyperparameters of binary-valued model:
@@ -114,8 +114,7 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
         name = '-'.join(str(x).replace('.','')
                         for x in (prefix, thresh, dim, k, a, seed))
     else:
-        prefix, thresh, dim, k, a, seed = name.split('-')
-        dim = int(dim)
+        prefix, thresh, *_ = name.split('-')
     
     if bias_method == 'target':
         fullname = name + '-' + '-'.join(str(x).replace('.','')
@@ -135,7 +134,7 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     
     # Load model
     if verbose: print("Loading model")
-    semfuncs = get_semfuncs_from_vectors(name, bias_method, scale, C, target, Z, alpha, pred_list)
+    semfuncs = get_semfuncs_from_vectors(name, bias_method, scale, C, target, Z, alpha, pred_list, directory=input_dir)
     
     # Calculate entity vectors
     
@@ -164,10 +163,10 @@ if __name__ == "__main__":
     
     bias_method = ['frequency']
     scales = [0.8, 1, 1.2]
-    Cs = [40, 80]
+    Cs = [30, 40, 60]
     targets = [None]
-    Zs = [0.001, 0.01, 0.1, 0.9]
-    alphas = [0, 0.6, 0.7, 0.75, 0.8]
+    Zs = [0.0001, 0.001, 0.01]
+    alphas = [0, 0.6, 0.7, 0.75, 0.8, 0.9, 1]
     
     grid = product(bias_method, scales, Cs, targets, Zs, alphas)
     
@@ -180,7 +179,7 @@ if __name__ == "__main__":
         if len(parts) != 6:
             continue
         prefix, thresh, dim, k, a, seed = parts
-        if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['06','07','075','08']:
+        if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['075','08','09','1']:
             simplevec_filtered.append(name.split('.')[0])
     
     full_grid = list(product(grid, simplevec_filtered))
@@ -190,5 +189,5 @@ if __name__ == "__main__":
         print(hyper, simple)
         get_entities(*hyper, name=simple, mean_field_kwargs={"max_iter":500}, output_dir='meanfield_freq')
     
-    with Pool(12) as p:
+    with Pool(16) as p:
         p.starmap(train, full_grid)
