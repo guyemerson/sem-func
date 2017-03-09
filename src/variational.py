@@ -265,7 +265,7 @@ def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_va
          
     return vec
 
-def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
+def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, init_max_value=0.5, vecs=None, new_value_fn=new_value_approx, verbose=False):
     """
     Calculate the posterior distribution over entities, under a mean field approximation,
     for a VSO triple
@@ -276,13 +276,15 @@ def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, i
     :param max_iter: stop after this number of iterations
     :param delta: stop when the max difference between iterations is less than this
     :param init_max_value: max value when initialising the vector
+    :param vecs: vectors to initialise approximation with
     :param new_value_fn: function giving optimal updates for individual components
     :param verbose: print summary information during descent
     :return: mean field entity vector
     """
     names = ['verb','agent','patient']
     # Initialise the entity vector
-    vecs = [init_vec(sf.wei, C, max_value=init_max_value) for sf in semfuncs]
+    if vecs is None:
+        vecs = [init_vec(sf.wei, C, max_value=init_max_value) for sf in semfuncs]
     if verbose:
         for nm, sf, v in zip(names, semfuncs, vecs):
             print(nm)
