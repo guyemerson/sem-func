@@ -3,7 +3,7 @@ import os, pickle, gzip, numpy as np, operator
 from testing import get_test_simlex_wordsim, get_simlex_wordsim_preds #, get_test_all
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
-from simplevec_to_entity import get_semfuncs_from_vectors
+from simplevec_to_entity import get_semfuncs_from_vectors, get_verb_noun_freq
 from variational import marginal_approx
 
 prefix = 'multicore'
@@ -14,6 +14,7 @@ test_all = get_test_simlex_wordsim(prefix, thresh)
 
 preds, _ = get_simlex_wordsim_preds(prefix, thresh)
 pred_list = sorted(preds)
+freq = get_verb_noun_freq(prefix, thresh, pred_list)
 
 # Semfunc model
 
@@ -84,7 +85,7 @@ def float_with_point(s):
     "Convert a setting from a string to a float (between 0 and 10)"
     return float(s[0]+'.'+s[1:])
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), test_fn=None, **kw):
+def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), test_fn=None, semfunc_subdir=None, basic_length=6, **kw):
     "Add new scores"
     # Choose test function
     if test_fn is None:
@@ -92,6 +93,8 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             test_fn = test_all_simplevec
         elif method == 'implies':
             test_fn = test_all_implies
+    if semfunc_subdir is None:
+        semfunc_subdir = subdir
     # Process each file
     prev_name = None  # Avoid reloading vectors
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
@@ -117,19 +120,19 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
         if method == 'simple':
             scores[settings] = test_fn(vec, **kw)
         elif method == 'implies':
-            name = '-'.join(settings[:6])
+            name = '-'.join(settings[:basic_length])
             # Load vectors
             if name != prev_name:
-                with gzip.open(os.path.join(AUX_DIR, 'simplevec', name+'.pkl.gz'), 'rb') as f:
+                with gzip.open(os.path.join(AUX_DIR, semfunc_subdir, name+'.pkl.gz'), 'rb') as f:
                     all_vectors = pickle.load(f)
                 vectors = all_vectors[pred_list]
                 del all_vectors
             if bias_method == 'target':
-                scale, C, target = settings[6:]
+                scale, C, target = settings[basic_length:]
                 target = float(target)
                 hyper = {'target': target}
             elif bias_method == 'frequency':
-                scale, C, Z, alpha = settings[6:]
+                scale, C, Z, alpha = settings[basic_length:]
                 Z = float_with_point(Z)
                 alpha = float_with_point(alpha)
                 hyper = {'Z': Z, 'alpha': alpha}
@@ -140,7 +143,7 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
             hyper['scale'] = scale
             hyper['C'] = C
             norm_vec = {i: marginal_approx(p, C) for i,p in vec.items()}
-            sf = get_semfuncs_from_vectors(name, bias_method, as_dict=True, pred_list=pred_list, vectors=vectors, **hyper)
+            sf = get_semfuncs_from_vectors(name, bias_method, as_dict=True, pred_list=pred_list, vectors=vectors, directory=semfunc_subdir, freq=freq, **hyper)
             scores[settings] = test_fn(norm_vec, sf, **kw)
             prev_name = name
 
@@ -202,7 +205,7 @@ def prop(x,y):
     """Combine P(a|b) and P(b|a) to P(a and b|a or b)"""
     return 1 / (1/x + 1/y - 1)
 
-
+"""
 scores = get_scores()
 add_scores(scores)
 save_scores(scores)
@@ -251,21 +254,30 @@ for op_name, op in [('add', operator.add),
     for i in [0,1,2,4]:
         print(get_max(av_scores_op, i))
     print(get_max(av_scores_op, [0,1,2,4]))
+"""
 
+#subdir = 'meanfield_freq'
+#semfunc_subdir = 'simplevec'
+#basic_length=6
+subdir = 'meanfield_freq_card'
+semfunc_subdir = 'simplevec_card'
+basic_length = 7
 
-for op_name, op in [('add', operator.add),
-                    ('mul', operator.mul),
+for op_name, op in [('mul', operator.mul),
+                    ('add', operator.add),
                     ('min', min),
                     ('max', max),
                     ('harm', harm),
                     ('prop', prop)]:
     score_filename = 'scores_'+op_name
-    scores_op = get_scores('meanfield_freq', score_filename)
-    add_scores(scores_op, 'meanfield_freq', method='implies', bias_method='frequency', op=op)
-    save_scores(scores_op, 'meanfield_freq', score_filename)
+    scores_op = get_scores(subdir, score_filename)
+    #add_scores(scores_op, subdir, method='implies', bias_method='frequency', op=op, semfunc_subdir=semfunc_subdir, basic_length=basic_length)
+    #save_scores(scores_op, subdir, score_filename)
     
-    av_scores_op = get_av_scores(scores_op)
+    av_scores_op = get_av_scores(scores_op, basic_length-1)
     print(op_name, 'best:')
     for i in [0,1,2,4]:
         print(get_max(av_scores_op, i))
     print(get_max(av_scores_op, [0,1,2]))
+
+

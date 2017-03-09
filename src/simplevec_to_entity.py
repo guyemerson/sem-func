@@ -26,7 +26,7 @@ def get_verb_noun_freq(prefix='multicore', thresh=5, pred_list=None):
     else:
         return freq[pred_list]
 
-def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, as_dict=False, directory='simplevec'):
+def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, freq=None, as_dict=False, directory='simplevec'):
     """
     Get semantic functions from given weights
     :param name: name of parameter file
@@ -72,7 +72,8 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     
     elif bias_method == 'frequency':
         # freq[i] ~ freq[i]^alpha / (Z + freq[i]^alpha) semfunc[i](ent) 
-        freq = get_verb_noun_freq(prefix, thresh, pred_list)
+        if freq is None:
+            freq = get_verb_noun_freq(prefix, thresh, pred_list)
         ent = np.ones(dim * 2) * C/dim
         bias = np.dot(vec, ent) + np.log(1 / freq / (1 + Z * freq ** -alpha) - 1)
     
