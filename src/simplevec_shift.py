@@ -10,34 +10,47 @@ D = 400  # Number of dimensions for nouns and verbs (separately)
 seed_range = [32, 8, 91, 64, 97]
 
 a_range = [0.75, 0.8, 0.9, 1]  # Power that frequencies are raised to under the null hypothesis
-k_range = [0]
+k_range = [-0.9, -0.69315, -0.5, 0]  # (-log(2), if we have half-half nouns and verbs in the same space)
 
 # Load files
 
 with open(os.path.join(AUX_DIR, '{}-vocab.pkl'.format(dataset)), 'rb') as f:
     pred_name = pickle.load(f)
 verb = np.array([is_verb(p) for p in pred_name], dtype='bool')
+noun = np.invert(verb)
 
 full_template = os.path.join(AUX_DIR, 'simplevec', '{}-{}-{}-{}.pkl.gz')
     
 # Calculate PPMI
-def ppmi(vec, a):
+def ppmi(vec, a, minimum=0):
+    """
+    Calculate positive pointwise mutual information
+    (for verbs and nouns separately)
+    :param vec: observed numbers of contexts
+    :param a: power to raise frequencies to, for smoothing
+    :param minimum: minimum ppmi score (default 0)
+    """
     # Smooth frequencies
     freq_pred = vec.sum(1) ** a
     freq_context = vec.sum(0) ** a
     
-    # Calculate marginal context probabilities (for noun and verb contexts separately)
+    # Normalise the smoothed marginal context probabilities (for noun and verb contexts separately)
     freq_context[:D] /= freq_context[:D].sum()
     freq_context[D:] /= freq_context[D:].sum()
     
-    # Calculate marginal predicate probabilities (for nouns and verbs separately)
-    freq_noun = vec * verb.reshape((-1,1))
-    freq_verb = vec * np.invert(verb).reshape((-1,1))
-    new = freq_noun / freq_noun.sum() + freq_verb / freq_verb.sum()
+    # Normalise the smoothed marginal pred probabilities (for noun and verb contexts separately)
+    freq_verb = freq_pred * verb
+    freq_noun = freq_pred * noun
+    freq_pred = freq_noun / freq_noun.sum() + freq_verb / freq_verb.sum()
+    
+    # Calculate joint probabilities (for nouns and verbs separately)
+    vec_verb = vec * verb.reshape((-1,1))
+    vec_noun = vec * noun.reshape((-1,1))
+    new = vec_noun / vec_noun.sum() + vec_verb / vec_verb.sum()
     
     # Take logs
-    log_pred = np.log(freq_pred / freq_pred.sum())
-    log_context = np.log(freq_context / freq_context.sum())
+    log_pred = np.log(freq_pred)
+    log_context = np.log(freq_context)
     new = np.log(new)
     
     # Subtract logs
@@ -45,10 +58,13 @@ def ppmi(vec, a):
     new -= log_pred.reshape((-1,1))
     
     # Keep positive
-    new.clip(0, out=vec)
+    new.clip(minimum, out=vec)
     return new
 
+min_k = min(k_range)
+
 for seed in seed_range:
+    print('seed', seed)
     
     with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
         count_vec = pickle.load(f)
@@ -56,16 +72,16 @@ for seed in seed_range:
     template = full_template.format(dataset, D, '{}-{}', seed)
     
     for a in a_range:
-        print(a)
-        vec = ppmi(count_vec, a)
+        print('a', a)
+        vec = ppmi(count_vec, a, min_k)
     
         # Shift and save
         
         for k in k_range:
-            filename = template.format(str(k).replace('.',''),
+            filename = template.format(str(k).replace('.','').replace('-','_'),
                                        str(a).replace('.',''))
             if os.path.exists(filename): continue
-            print(k)
+            print('k', k)
             new = (vec - k).clip(0)
             with gzip.open(filename, 'wb') as f:
                 pickle.dump(new, f)

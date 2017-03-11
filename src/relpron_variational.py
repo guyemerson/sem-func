@@ -1,6 +1,6 @@
 import os, gzip, pickle, numpy as np
 
-from variational import mean_field_vso
+from variational import mean_field_vso, marginal_approx
 from simplevec_to_entity import get_semfuncs_from_vectors, get_verb_noun_freq
 from testing import get_relpron_preds
 from __config__.filepath import AUX_DIR
@@ -25,11 +25,12 @@ def get_scoring_fn(semfuncs, link_wei, ent_bias, C, init_vecs):
         """
         sf = [semfuncs[i] for i in triple]
         vecs = [init_vecs[i] for i in triple]
-        post = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
+        meanfield = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
+        marg = [marginal_approx(prob, C) for prob in meanfield]
         if which == 'SBJ':
-            return semfuncs[target](post[1])
+            return semfuncs[target](marg[1])
         else:
-            return semfuncs[target](post[2])
+            return semfuncs[target](marg[2])
     
     return score
     

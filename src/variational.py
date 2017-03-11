@@ -131,9 +131,9 @@ def marginal_approx(prob, C):
     :param C: total cardinality
     :return: marginal probabilities
     """
-    total = prob.sum()
-    scaled = prob / total * C
-    # (To be safe we could check if any components are above 1
+    scaled = prob / prob.sum() * C
+    np.clip(scaled, 0, 1, scaled)
+    # (This may leave the total below C)
     return scaled
 
 ### Optimisation
