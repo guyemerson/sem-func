@@ -298,13 +298,16 @@ def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, i
                 print(names[i])
             v = vecs[i]
             sf = semfuncs[i]
+            
+            marg = [marginal_approx(p, C) for p in vecs]
             # Get probability ratio from link weights
             if i == 0:
-                prob_ratio = np.exp(np.dot(link_wei[0], vecs[1]) + np.dot(link_wei[1], vecs[2]) - ent_bias)
+                prob_ratio = np.exp(np.dot(link_wei[0], marg[1]) + np.dot(link_wei[1], marg[2]) - 2 * ent_bias)
             elif i == 1:
-                prob_ratio = np.exp(np.dot(vecs[0], link_wei[0]) - ent_bias)
+                prob_ratio = np.exp(np.dot(marg[0], link_wei[0]) - ent_bias)
             elif i == 2:
-                prob_ratio = np.exp(np.dot(vecs[0], link_wei[1]) - ent_bias)
+                prob_ratio = np.exp(np.dot(marg[0], link_wei[1]) - ent_bias)
+            #print(i, prob_ratio)
             # Update the vector
             new = update(v, sf, C, new_value_fn=new_value_fn, prob_ratio=prob_ratio)
             diff = np.abs(new - v).max()
