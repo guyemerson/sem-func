@@ -30,15 +30,15 @@ def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, **kwargs
     """
     Calculate mean average precision (MAP) for finding properties of terms
     :param score_fn: function from (which, term, (verb, agent, patient)) to score
-    :param items: list of above tuples, with correct terms
+    :param items: list of (which, (verb, agent, patient)) tuples
     :param term_to_properties: mapping from terms to indices of the items list
     """
     av_precision = []
     for term in term_to_properties:
-        substituted_items = ((which, term, triple) for which, _, triple in items)
+        substituted_items = ((which, term, triple) for which, triple in items)
         all_scores = scores(score_fn, substituted_items, **kwargs)
         ranking = list(reversed(all_scores.argsort()))
-        positions = [ranking.index(i) for i in term_to_properties[term]]
+        positions = sorted([ranking.index(i) for i in term_to_properties[term]])
         precision = [(i+1)/(pos+1) for i, pos in enumerate(positions)]
         av_prec = sum(precision)/len(precision)
         if verbose:
@@ -150,6 +150,25 @@ def get_relpron(testset=False):
             items.append((which, noun[:-3], (verb[:-2], subj[:-2], obj[:-2])))
     return items
 
+def get_relpron_hyper(testset=False):
+    """
+    Get mapping from terms to hypernyms, from the RelPron data
+    :param testset: use testset (default, use devset)
+    :return: dict of {term: hypernym}
+    """
+    if testset:
+        subset = 'testset'
+    else:
+        subset = 'devset'
+    hyper = {}
+    with open('../data/relpron/'+subset, 'r') as f:
+        for line in f:
+            # e.g.
+            # OBJ garrison_N: organization_N that army_N install_V
+            _, noun, head, _, _, _ = line.strip().split()
+            hyper[noun[:-3]] = head[:-2]
+    return hyper
+
 def get_relpron_separated(testset=False):
     """
     Get RelPron data, separating properties from terms
@@ -162,7 +181,7 @@ def get_relpron_separated(testset=False):
     for i, (which, term, triple) in enumerate(items):
         term_to_properties[term].add(i)
         reduced_items.append((which, triple))
-    return items, term_to_properties
+    return reduced_items, term_to_properties
 
 # Lookup
 
@@ -207,7 +226,7 @@ def get_freq_lookup_dicts(pred_name, pred_freq):
         freq_lookup[pos] = {lemma:max(inds, key=key) for lemma, inds in x_lookup.items()}
     return freq_lookup
 
-def load_freq_lookup_dicts(prefix, thresh):
+def load_freq_lookup_dicts(prefix='multicore', thresh=5):
     """
     Load part-of-speech-specific dicts mapping lemmas to the most frequent index
     :param prefix: name of dataset
@@ -222,7 +241,9 @@ def load_freq_lookup_dicts(prefix, thresh):
     # Get lookup dictionaries
     return get_freq_lookup_dicts(pred_name, pred_freq)
 
-def get_simlex_wordsim_preds(prefix, thresh):
+# Predicate indices from datasets
+
+def get_simlex_wordsim_preds(prefix='multicore', thresh=5):
     """
     Get the set of pred indices from simlex and wordsim
     :param prefix: name of dataset
@@ -244,9 +265,9 @@ def get_simlex_wordsim_preds(prefix, thresh):
                 except KeyError:
                     OOV.add(x)
     
-    return preds, OOV 
+    return preds, OOV
 
-def get_relpron_preds(prefix, thresh, include_test=True, include_dev=True):
+def get_relpron_preds(prefix='multicore', thresh=5, include_test=True, include_dev=True):
     """
     Get the set of pred indices from the relpron dataset
     :param include_test: include testset preds
@@ -273,9 +294,9 @@ def get_relpron_preds(prefix, thresh, include_test=True, include_dev=True):
             except KeyError:
                 OOV.add(x)
     
-    return preds, OOV 
+    return preds, OOV
 
-def get_test_preds(prefix, thresh):
+def get_test_preds(prefix='multicore', thresh=5):
     """
     Get the set of pred indices from all test datasets
     :param prefix: name of dataset
@@ -304,7 +325,7 @@ def get_test_preds(prefix, thresh):
     preds.update(relpron_preds)
     OOV.update(relpron_OOV)
     
-    return preds, OOV 
+    return preds, OOV
 
 # Wrappers for similarity functions
 
@@ -316,10 +337,10 @@ def with_lookup(old_fn, lookup):
     :param lookup: mapping from lemmas to sets of indices
     :return: similarity function
     """
-    def sim_fn(a, b):
+    def sim_fn(a, b, *args, **kwargs):
         "Calculate similarity"
         try:
-            return old_fn(lookup[a], lookup[b])
+            return old_fn(lookup[a], lookup[b], *args, **kwargs)
         except KeyError:
             # Unknown lemmas
             return 0
@@ -335,7 +356,7 @@ def with_weighted_lookup(old_fn, lookup, freq):
     :param freq: mapping from indices to frequencies
     :return: similarity function
     """
-    def sim_fn(a, b):
+    def sim_fn(a, b, *args, **kwargs):
         "Calculate the average similarity across all preds, weighted by frequency"
         scores = []
         freqs = []
@@ -343,7 +364,7 @@ def with_weighted_lookup(old_fn, lookup, freq):
             for p in lookup[a]:
                 for q in lookup[b]:
                     # Get similarity and frequency
-                    scores.append(old_fn(p, q))
+                    scores.append(old_fn(p, q, *args, **kwargs))
                     freqs.append(freq[p]*freq[q])
             # Calculate weighted average
             totalscore = sum(scores[i] * freqs[i] for i in range(len(scores)))
@@ -360,9 +381,9 @@ def from_index(old_fn, pred_name):
     :param old_fn: function taking a pair of pred names and returning a similarity score
     :return: similarity function
     """
-    def sim_fn(a, b):
+    def sim_fn(a, b, *args, **kwargs):
         "Look up pred names, then apply the old function"
-        return old_fn(pred_name[a], pred_name[b])
+        return old_fn(pred_name[a], pred_name[b], *args, **kwargs)
     return sim_fn
 
 def with_lookup_for_relpron(old_fn, lookup):
@@ -373,7 +394,7 @@ def with_lookup_for_relpron(old_fn, lookup):
     :param lookup: mapping from lemmas to sets of indices, separately for nouns and verbs
     :return: similarity function
     """
-    def new_fn(which, term, triple):
+    def new_fn(which, term, triple, **kwargs):
         "Calculate score"
         verb, agent, patient = triple
         try:
@@ -384,9 +405,10 @@ def with_lookup_for_relpron(old_fn, lookup):
                            lookup['n'][patient]))
         except KeyError:
             # Unknown lemmas
+            # TODO - instead, use an an empty semfunc, or use an approximate match
             return 0
         
-        return old_fn(*transformed)
+        return old_fn(*transformed, *args, **kwargs)
     
     return new_fn
 
@@ -441,7 +463,7 @@ def filter_common(freq, lookup, pairs, scores, threshold=1000):
             pass
     return common
 
-def get_test_simlex_wordsim(prefix, thresh):
+def get_test_simlex_wordsim(prefix='multicore', thresh=5):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
@@ -483,7 +505,7 @@ def get_test_simlex_wordsim(prefix, thresh):
     
     return test_all
 
-def get_test_all(prefix, thresh):
+def get_test_all(prefix='multicore', thresh=5):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
@@ -537,7 +559,7 @@ def get_test_all(prefix, thresh):
     
     return test_all
 
-def get_test_relpron(prefix, thresh, testset=False):
+def get_test_relpron(prefix='multicore', thresh=5, testset=False):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
