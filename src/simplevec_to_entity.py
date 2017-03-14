@@ -1,7 +1,7 @@
 import os, pickle, gzip, numpy as np
 
 from variational import get_semfunc, mean_field
-from testing import get_simlex_wordsim_preds
+from testing import get_test_preds
 from __config__.filepath import AUX_DIR
 from utils import is_verb
 
@@ -44,7 +44,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     dim = int(dim)
     # Predicates to use
     if pred_list is None:
-        preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+        preds, _ = get_test_preds(prefix, thresh)
         pred_list = sorted(preds)
     # Load vectors
     if vectors is None:
@@ -86,7 +86,8 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     else:
         return [get_semfunc(v,b) for v,b in zip(vec, bias)]
 
-def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, seed=32, pred_list=None, mean_field_kwargs=None, output_dir='meanfield', input_dir='simplevec', skip_if_exists=True, verbose=False):
+def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, smoothing=0, seed=32,
+                 pred_list=None, mean_field_kwargs=None, output_dir='meanfield', input_dir='simplevec', skip_if_exists=True, bias_suffix='bias', verbose=False):
     """
     Get mean field entity vectors based on given parameter vectors
     Hyperparameters of binary-valued model:
@@ -103,25 +104,30 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     :param dim: number of dimensions (D/2)
     :param k: negative shift
     :param a: power that frequencies are raised to
+    :param smoothing: constant added to context counts
     :param seed: random seed
     Other:
-    :param output_dir: directory to save meanfield vectors
     :param pred_list: list of predicates to use
+    :param mean_field_kwargs: kwargs when calculating meanfield vectors
+    :param output_dir: directory to save meanfield vectors
+    :param input_dir: directory for parameter vectors
+    :param skip_if_exists: skip files that have already been calculated
+    :param bias_suffix: name for files
     :param verbose: print messages
     :return: {pred: entity vector}
     """
     # File names
     if name is None:
-        name = '-'.join(str(x).replace('.','')
-                        for x in (prefix, thresh, dim, k, a, seed))
+        name = '-'.join(str(x).replace('.','_').replace('-','~')
+                        for x in (prefix, thresh, dim, k, a, smoothing, seed))
     else:
         prefix, thresh, *_ = name.split('-')
     
     if bias_method == 'target':
-        fullname = name + '-' + '-'.join(str(x).replace('.','')
+        fullname = name + '-' + '-'.join(str(x).replace('.','_')
                                          for x in (scale, C, target))
     elif bias_method == 'frequency':
-        fullname = name + '-' + '-'.join(str(x).replace('.','')
+        fullname = name + '-' + '-'.join(str(x).replace('.','_')
                                          for x in (scale, C, Z, alpha))
     
     # Skip if this setup has already been calculated
@@ -130,12 +136,16 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     
     # Predicates to use
     if pred_list is None:
-        preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+        preds, _ = get_test_preds(prefix, thresh)
         pred_list = sorted(preds)
     
     # Load model
     if verbose: print("Loading model")
     semfuncs = get_semfuncs_from_vectors(name, bias_method, scale, C, target, Z, alpha, pred_list, directory=input_dir)
+    # Save biases
+    biases = {i:sf.bias for i, sf in zip(pred_list, semfuncs)}
+    with gzip.open(os.path.join(AUX_DIR, output_dir, '{}-{}.pkl.gz'.format(fullname, bias_suffix)), 'wb') as f:
+        pickle.dump(biases, f)
     
     # Calculate entity vectors
     
@@ -164,7 +174,7 @@ if __name__ == "__main__":
     
     bias_method = ['frequency']
     scales = [0.8, 1, 1.2]
-    Cs = [30, 40, 60]
+    Cs = [30, 40, 50]
     targets = [None]
     Zs = [0.0001, 0.001, 0.01]
     alphas = [0, 0.6, 0.7, 0.75, 0.8, 0.9, 1]
@@ -177,18 +187,18 @@ if __name__ == "__main__":
     simplevec_filtered = []
     for name in simplevec:
         parts = name.split('-')
-        if len(parts) != 6:
+        if len(parts) != 7:
             continue
-        prefix, thresh, dim, k, a, seed = parts
-        if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['075','08','09','1']:
-            simplevec_filtered.append(name.split('.')[0])
+        prefix, thresh, dim, k, a, smoothing, seed = parts
+        #if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['075','08','09','1']:
+        simplevec_filtered.append(name.split('.')[0])
     
     full_grid = list(product(grid, simplevec_filtered))
     shuffle(full_grid)
     
-    def train(hyper, simple):
-        print(hyper, simple)
-        get_entities(*hyper, name=simple, mean_field_kwargs={"max_iter":500}, output_dir='meanfield_freq')
+    def train(hyper, simplevec_name):
+        print(hyper, simplevec_name)
+        get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield_freq')
     
     with Pool(16) as p:
         p.starmap(train, full_grid)
