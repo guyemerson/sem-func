@@ -5,18 +5,28 @@ from testing import get_test_preds
 from __config__.filepath import AUX_DIR
 from utils import is_verb
 
+def get_verbs(prefix='multicore', thresh=5):
+    """
+    Get boolean array, True if the pred is a verb
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :return: frequency array
+    """
+    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix, thresh)), 'rb') as f:
+        vocab = pickle.load(f)
+    return np.array([is_verb(x) for x in vocab])
+
 def get_verb_noun_freq(prefix='multicore', thresh=5, pred_list=None):
     """
     Get frequency, normalised separately for nouns and verbs
     :param prefix: name of dataset
     :param thresh: frequency threshold
+    :param pred_list: if given, only return frequency for these preds
     :return: frequency array
     """
     with open(os.path.join(AUX_DIR, '{}-{}-freq.pkl'.format(prefix, thresh)), 'rb') as f:
         freq = pickle.load(f)
-    with open(os.path.join(AUX_DIR, '{}-{}-vocab.pkl'.format(prefix, thresh)), 'rb') as f:
-        vocab = pickle.load(f)
-    verbs = np.array([is_verb(x) for x in vocab])
+    verbs = get_verbs(prefix, thresh)
     nouns = np.invert(verbs)
     freq = np.array(freq, dtype='float')  # to allow division
     freq[verbs] /= freq[verbs].sum()
@@ -86,7 +96,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     else:
         return [get_semfunc(v,b) for v,b in zip(vec, bias)]
 
-def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=None, prefix='multicore', thresh=5, dim=400, k=0, a=0.75, smoothing=0, seed=32,
+def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, wrong_weight=0, name=None, basic_settings=None,
                  pred_list=None, mean_field_kwargs=None, output_dir='meanfield', input_dir='simplevec', skip_if_exists=True, bias_suffix='bias', verbose=False):
     """
     Get mean field entity vectors based on given parameter vectors
@@ -97,15 +107,10 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     :param target: desired energy for an 'untypical' vector (only for bias method 'target')
     :param Z: normalisation constant for predicate truth (only for bias method 'frequency')
     :param alpha: smoothing of frequency in generation (only for bias method 'frequency')
+    :param wrong_weight: weight for decreasing the probability of the 'wrong' dimensions (for verbs or nouns)
     Simple vector model to load:
     :param name: name of model, as a string, or else use the following:
-    :param prefix: name of dataset
-    :param thresh: frequency threshold
-    :param dim: number of dimensions (D/2)
-    :param k: negative shift
-    :param a: power that frequencies are raised to
-    :param smoothing: constant added to context counts
-    :param seed: random seed
+    :param basic_settings: alternatively, iterable of settings
     Other:
     :param pred_list: list of predicates to use
     :param mean_field_kwargs: kwargs when calculating meanfield vectors
@@ -119,16 +124,17 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     # File names
     if name is None:
         name = '-'.join(str(x).replace('.','_').replace('-','~')
-                        for x in (prefix, thresh, dim, k, a, smoothing, seed))
-    else:
-        prefix, thresh, *_ = name.split('-')
+                        for x in basic_settings)
+    
+    prefix, thresh, dim, *_ = name.split('-')
+    dim = int(dim)
     
     if bias_method == 'target':
-        fullname = name + '-' + '-'.join(str(x).replace('.','_')
-                                         for x in (scale, C, target))
+        fullname = name + '-' + '-'.join(str(x).replace('.','_').replace('-','~')
+                                         for x in (scale, C, target, wrong_weight))
     elif bias_method == 'frequency':
-        fullname = name + '-' + '-'.join(str(x).replace('.','_')
-                                         for x in (scale, C, Z, alpha))
+        fullname = name + '-' + '-'.join(str(x).replace('.','_').replace('-','~')
+                                         for x in (scale, C, Z, alpha, wrong_weight))
     
     # Skip if this setup has already been calculated
     if skip_if_exists and os.path.exists(os.path.join(AUX_DIR, output_dir, fullname+'.pkl.gz')):
@@ -149,13 +155,20 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, name=No
     
     # Calculate entity vectors
     
+    noun_ratio = np.ones(2*dim)
+    noun_ratio[dim:] = np.exp(-wrong_weight)
+    verb_ratio = np.ones(2*dim)
+    verb_ratio[:dim] = np.exp(-wrong_weight)
+    ratio = {True: verb_ratio, False: noun_ratio}
+    verbs = get_verbs(prefix, thresh)
+    
     if verbose: print("Calculating entity vectors")
     if mean_field_kwargs is None:
         mean_field_kwargs = {}
     ent = {}
     for i, sf in zip(pred_list, semfuncs):
         if verbose: print(i)
-        ent[i] = mean_field(sf, C, **mean_field_kwargs)
+        ent[i] = mean_field(sf, C, prob_ratio=ratio[verbs[i]], **mean_field_kwargs)
     
     # Save to disk
     
@@ -178,6 +191,7 @@ if __name__ == "__main__":
     targets = [None]
     Zs = [0.0001, 0.001, 0.01]
     alphas = [0, 0.6, 0.7, 0.75, 0.8, 0.9, 1]
+    wrong_weights = [1, 4, 16]
     
     grid = product(bias_method, scales, Cs, targets, Zs, alphas)
     
@@ -198,7 +212,7 @@ if __name__ == "__main__":
     
     def train(hyper, simplevec_name):
         print(hyper, simplevec_name)
-        get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield_freq')
+        get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield')
     
     with Pool(16) as p:
         p.starmap(train, full_grid)

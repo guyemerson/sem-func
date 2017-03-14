@@ -81,10 +81,6 @@ def save_scores(scores, subdir='simplevec', filename='scores'):
     with open(score_file, 'wb') as f:
         pickle.dump(scores, f)
 
-def float_with_point(s):
-    "Convert a setting from a string to a float (between 0 and 10)"
-    return float(s[0]+'.'+s[1:])
-
 def add_simple_scores(scores, subdir='simplevec', length=7, pred_list=pred_list, constr=(), test_fn=test_all_implies, **test_fn_kwargs):
     "Add new scores"
     # Process each file
@@ -118,9 +114,6 @@ def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanf
         # Process filename
         name = filename.split('.')[0]
         settings = tuple(name.split('-'))
-        basic_settings = settings[:basic_length]
-        basic_name = '-'.join(basic_settings)
-        C = int(settings[C_index])
         # Ignore auxiliary files
         if len(settings) != full_length:
             continue
@@ -133,6 +126,10 @@ def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanf
         # Ignore files that don't match the given constraints:
         if any(settings[pos] not in [str(x).replace('.','') for x in val] for pos,val in constr):
             continue
+        # Extract information from filename
+        basic_settings = settings[:basic_length]
+        basic_name = '-'.join(basic_settings)
+        C = int(settings[C_index])
         # Load the parameter vectors
         print(filename)
         if basic_name != prev_basic_name:
@@ -167,7 +164,7 @@ def get_av_scores(scores, seed_index=6):
         av_scores[s] = (len(arrs), np.array(arrs).mean(0))
     return av_scores
 
-def get_av_probs(scores, seed_index=5):
+def get_av_probs(scores, seed_index=6):
     "Average over random seeds"
     av_scores = {}
     # Group scores
@@ -232,12 +229,13 @@ mf_av_scores = get_av_scores(mf_scores)
 for i in [0,1,2,4]:
     print(get_max(mf_av_scores, i))
 print(get_max(mf_av_scores, [0,1,2,4]))
-
+""
 self_prob = get_scores('meanfield_freq', 'self_prob')
-add_scores(self_prob, 'meanfield_freq', method='implies', bias_method='frequency', test_fn=implies_self)
+add_semfunc_scores(self_prob, test_fn=implies_self)
 save_scores(self_prob, 'meanfield_freq', 'self_prob')
 av_self_prob = get_av_probs(self_prob)
 
+""
 
 for op_name, op in [('add', operator.add),
                     ('mul', operator.mul),
@@ -266,7 +264,7 @@ for op_name, op in [('add', operator.add),
 #subdir = 'meanfield_freq_card'
 #semfunc_subdir = 'simplevec_card'
 #basic_length = 7
-
+""
 for op_name, op in [('mul', operator.mul),
                     ('add', operator.add),
                     ('min', min),
@@ -274,14 +272,15 @@ for op_name, op in [('mul', operator.mul),
                     ('harm', harm),
                     ('prop', prop)]:
     score_filename = 'scores_'+op_name
-    scores = get_scores(filename=score_filename)
+    scores = get_scores('meanfield_freq', score_filename)
     add_semfunc_scores(scores, op=op)
-    save_scores(scores, filename=score_filename)
+    save_scores(scores, 'meanfield_freq', score_filename)
     
-    av_scores_op = get_av_scores(scores)
+    av_scores = get_av_scores(scores)
     print(op_name, 'best:')
     for i in [0,1,2,4,5,6,7,8]:
-        print(get_max(av_scores_op, i))
-    print(get_max(av_scores_op, [0,1,2,4,5]))
+        print(get_max(av_scores, i))
+    print(get_max(av_scores, [0,1,2,4,5]))
 
 
+""

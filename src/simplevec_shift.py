@@ -1,18 +1,23 @@
 import pickle, gzip, os, numpy as np
 from itertools import product
+from multiprocessing import Pool
 
+from testing import get_test_preds
 from utils import is_verb
 from __config__.filepath import AUX_DIR
 
 # Hyperparameters
 
-dataset = 'multicore-5'
+prefix = 'multicore'
+thresh = '5'
+dataset = prefix+'-'+thresh
 D = 400  # Number of dimensions for nouns and verbs (separately) 
 seed_range = [32, 8, 91, 64, 97]
 
-smoothing_range = [0, 0.1, 1]  # Added to all counts
-a_range = [0.75, 0.8, 0.9, 1]  # Power that frequencies are raised to under the null hypothesis
-k_range = [-0.9, -0.69315, -0.5, 0]  # (-log(2), if we have half-half nouns and verbs in the same space)
+right_smooth_range = [0, 0.1, 1]  # Added to counts of the right type
+all_smooth_range = [10**-20, 10**-5]  # Added to all counts
+a_range = [0.8, 1]  # Power that frequencies are raised to under the null hypothesis
+k_range = [-0.6, -0.3, 0, 0.3]  # (-log(2), if we have half-half nouns and verbs in the same space)
 
 # Load files
 
@@ -28,18 +33,21 @@ noun_ones[:D] = 1
 smoothing_array = np.outer(verb, verb_ones) + np.outer(noun, noun_ones)
 
 full_template = os.path.join(AUX_DIR, 'simplevec', '{}-{}-{}-{}.pkl.gz')
+
+pred_list, _ = get_test_preds(prefix, thresh)
     
-# Calculate PPMI
-def ppmi(obs_vec, a, smoothing, minimum=0):
+# Calculate PMI
+def pmi(obs_vec, a, right_smooth, all_smooth):
     """
     Calculate positive pointwise mutual information
     (for verbs and nouns separately)
-    :param vec: observed numbers of contexts
+    :param obs_vec: observed numbers of contexts
     :param a: power to raise frequencies to, for smoothing
-    :param minimum: minimum ppmi score (default 0)
+    :param right_smooth: value to add to contexts of the right type (noun/verb)
+    :param all_smooth: value to add to all contexts
     """
     # Smooth frequencies
-    vec = obs_vec + smoothing * smoothing_array
+    vec = obs_vec + right_smooth * smoothing_array + all_smooth
     freq_pred = vec.sum(1) ** a
     freq_context = vec.sum(0) ** a
     
@@ -65,33 +73,42 @@ def ppmi(obs_vec, a, smoothing, minimum=0):
     # Subtract logs
     new -= log_context
     new -= log_pred.reshape((-1,1))
+    new += np.log(2)  # To put nouns and verbs in the same space
     
-    # Keep positive
-    new.clip(minimum, out=vec)
     return new
 
-min_k = min(k_range)
 
-for seed in seed_range:
+def expand_seed(seed, clip=False):
     print('seed:', seed)
     
     with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
         count_vec = pickle.load(f)
     
-    template = full_template.format(dataset, D, '{}-{}-{}', seed)
+    template = full_template.format(dataset, D, '{}-{}-{}-{}', seed)
     
-    for a, smoothing in product(a_range, smoothing_range):
-        print('a, smoothing:', a, smoothing)
-        vec = ppmi(count_vec, a, smoothing, min_k)
+    for a, right_smooth, all_smooth in product(a_range, right_smooth_range, all_smooth_range):
+        print('a, right_smooth, all_smooth:', a, right_smooth, all_smooth)
+        vec = pmi(count_vec, a, right_smooth, all_smooth)
     
         # Shift and save
         
         for k in k_range:
             filename = template.format(str(k).replace('.','_').replace('-','~'),
-                                       str(a).replace('.','_'),
-                                       str(smoothing).replace('.','_'))
+                                       str(a).replace('.','_').replace('-','~'),
+                                       str(right_smooth).replace('.','_').replace('-','~'),
+                                       str(all_smooth).replace('.','_').replace('-','~'))
             if os.path.exists(filename): continue
             print('k:', k)
-            new = (vec - k).clip(0)
+            new = (vec - k)
+            if clip:
+                new = new.clip(0, out=new)
+            
+            # Filter preds
+            filtered = {i: new[i] for i in pred_list}
+            
             with gzip.open(filename, 'wb') as f:
-                pickle.dump(new, f)
+                pickle.dump(filtered, f)
+
+
+with Pool(5) as p:
+    p.map(expand_seed, seed_range)

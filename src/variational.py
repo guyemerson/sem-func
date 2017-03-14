@@ -205,6 +205,7 @@ def update(vec, semfunc, C, new_value_fn, prob_ratio=None):
     :param semfunc: semantic function
     :param C: total cardinality
     :param new_value_fn: function giving optimal updates for individual components
+    :param prob_ratio: ratio of probabilities of each each dimension being on or off
     :return: updated entity vector
     """
     new = np.copy(vec)
@@ -226,11 +227,12 @@ def update(vec, semfunc, C, new_value_fn, prob_ratio=None):
         new[i] = new_value_fn(new, semfunc, i, C, prob_ratio=prob_ratio)
     return new
 
-def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
+def mean_field(semfunc, C, prob_ratio=None, max_iter=50, delta=10**-4, init_max_value=0.5, new_value_fn=new_value_approx, verbose=False):
     """
     Calculate the posterior distribution over entities, under a mean field approximation
     :param semfunc: semantic function
     :param C: total cardinality
+    :param prob_ratio: ratio of probabilities of each each dimension being on or off
     :param max_iter: stop after this number of iterations
     :param delta: stop when the max difference between iterations is less than this
     :param init_max_value: max value when initialising the vector
@@ -245,7 +247,7 @@ def mean_field(semfunc, C, max_iter=50, delta=10**-4, init_max_value=0.5, new_va
         print('nonzero entries', len(semfunc.nonzero))
     # Optimise the entity vector
     for _ in range(max_iter):
-        new = update(vec, semfunc, C, new_value_fn=new_value_fn)
+        new = update(vec, semfunc, C, new_value_fn=new_value_fn, prob_ratio=prob_ratio)
         diff = np.abs(new - vec).max()
         
         if verbose:
