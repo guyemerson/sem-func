@@ -1,18 +1,18 @@
 import os, pickle, gzip, numpy as np, operator
 
-from testing import get_test_simlex_wordsim, get_simlex_wordsim_preds #, get_test_all
+from testing import get_test_all, get_test_preds #, get_test_all
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
-from simplevec_to_entity import get_semfuncs_from_vectors, get_verb_noun_freq
-from variational import marginal_approx
+from simplevec_to_entity import get_verb_noun_freq
+from variational import marginal_approx, get_semfunc
 
 prefix = 'multicore'
 thresh = 5
 name = 'example'
 
-test_all = get_test_simlex_wordsim(prefix, thresh)
+test_all = get_test_all(prefix, thresh)
 
-preds, _ = get_simlex_wordsim_preds(prefix, thresh)
+preds, _ = get_test_preds(prefix, thresh)
 pred_list = sorted(preds)
 freq = get_verb_noun_freq(prefix, thresh, pred_list)
 
@@ -85,24 +85,16 @@ def float_with_point(s):
     "Convert a setting from a string to a float (between 0 and 10)"
     return float(s[0]+'.'+s[1:])
 
-def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method='simple', bias_method='target', constr=(), test_fn=None, semfunc_subdir=None, basic_length=6, **kw):
+def add_simple_scores(scores, subdir='simplevec', length=7, pred_list=pred_list, constr=(), test_fn=test_all_implies, **test_fn_kwargs):
     "Add new scores"
-    # Choose test function
-    if test_fn is None:
-        if method == 'simple':
-            test_fn = test_all_simplevec
-        elif method == 'implies':
-            test_fn = test_all_implies
-    if semfunc_subdir is None:
-        semfunc_subdir = subdir
     # Process each file
-    prev_name = None  # Avoid reloading vectors
     for filename in sorted(os.listdir(os.path.join(AUX_DIR, subdir))):
-        # Ignore summary files
-        if filename.split('.')[-1] != 'gz':
-            continue
         # Process filename
-        settings = tuple(filename.split('.')[0].split('-'))
+        name = filename.split('.')[0]
+        settings = tuple(name.split('-'))
+        # Ignore auxiliary files
+        if len(settings) != length:
+            continue
         # Ignore files if we haven't loaded that version of the dataset
         if settings[0] != prefix or int(settings[1]) != thresh:
             continue
@@ -113,41 +105,53 @@ def add_scores(scores, subdir='simplevec', prefix=prefix, thresh=thresh, method=
         if any(settings[pos] not in [str(x).replace('.','') for x in val] for pos,val in constr):
             continue
         # Load the vectors
-        print(filename)
         with gzip.open(os.path.join(AUX_DIR, subdir, filename), 'rb') as f:
-            vec = pickle.load(f)
-        # Test according to chosen method
-        if method == 'simple':
-            scores[settings] = test_fn(vec, **kw)
-        elif method == 'implies':
-            name = '-'.join(settings[:basic_length])
-            # Load vectors
-            if name != prev_name:
-                with gzip.open(os.path.join(AUX_DIR, semfunc_subdir, name+'.pkl.gz'), 'rb') as f:
-                    all_vectors = pickle.load(f)
-                vectors = all_vectors[pred_list]
-                del all_vectors
-            if bias_method == 'target':
-                scale, C, target = settings[basic_length:]
-                target = float(target)
-                hyper = {'target': target}
-            elif bias_method == 'frequency':
-                scale, C, Z, alpha = settings[basic_length:]
-                Z = float_with_point(Z)
-                alpha = float_with_point(alpha)
-                hyper = {'Z': Z, 'alpha': alpha}
-            else:
-                raise ValueError('bias method not recognised')
-            scale = float_with_point(scale)
-            C = int(C)
-            hyper['scale'] = scale
-            hyper['C'] = C
-            norm_vec = {i: marginal_approx(p, C) for i,p in vec.items()}
-            sf = get_semfuncs_from_vectors(name, bias_method, as_dict=True, pred_list=pred_list, vectors=vectors, directory=semfunc_subdir, freq=freq, **hyper)
-            scores[settings] = test_fn(norm_vec, sf, **kw)
-            prev_name = name
+            vectors = pickle.load(f)
+        # Test
+        scores[settings] = test_fn(vectors, **test_fn_kwargs)
 
-def get_av_scores(scores, seed_index=5):
+def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanfield_freq', basic_length=7, full_length=11, C_index=8, pred_list=pred_list, constr=(), test_fn=test_all_implies, **test_fn_kwargs):
+    "Add new scores"
+    # Process each file
+    prev_basic_name = None  # Avoid reloading vectors
+    for filename in sorted(os.listdir(os.path.join(AUX_DIR, meanfield_subdir))):
+        # Process filename
+        name = filename.split('.')[0]
+        settings = tuple(name.split('-'))
+        basic_settings = settings[:basic_length]
+        basic_name = '-'.join(basic_settings)
+        C = int(settings[C_index])
+        # Ignore auxiliary files
+        if len(settings) != full_length:
+            continue
+        # Ignore files if we haven't loaded that version of the dataset
+        if settings[0] != prefix or int(settings[1]) != thresh:
+            continue
+        # Ignore files we've already evaluated
+        if settings in scores:
+            continue
+        # Ignore files that don't match the given constraints:
+        if any(settings[pos] not in [str(x).replace('.','') for x in val] for pos,val in constr):
+            continue
+        # Load the parameter vectors
+        print(filename)
+        if basic_name != prev_basic_name:
+            with gzip.open(os.path.join(AUX_DIR, param_subdir, basic_name+'.pkl.gz'), 'rb') as f:
+                param_vec = pickle.load(f)
+            prev_basic_name = basic_name
+        # Load the biases
+        with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, name+'-bias.pkl.gz'), 'rb') as f:
+            bias = pickle.load(f)
+        # Construct the semantic functions
+        semfuncs = {i:get_semfunc(param_vec[i], bias[i]) for i in bias}
+        # Load the entity vectors
+        with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, filename), 'rb') as f:
+            meanfield_vec = pickle.load(f)
+        marginal_vec = {i: marginal_approx(p, C) for i,p in meanfield_vec.items()}
+        # Test
+        scores[settings] = test_fn(marginal_vec, semfuncs, **test_fn_kwargs)
+
+def get_av_scores(scores, seed_index=6):
     "Average over random seeds"
     av_scores = {}
     # Group scores
@@ -256,12 +260,12 @@ for op_name, op in [('add', operator.add),
     print(get_max(av_scores_op, [0,1,2,4]))
 """
 
-#subdir = 'meanfield_freq'
-#semfunc_subdir = 'simplevec'
+#subdir = '/local/scratch/gete2/variational/meanfield_freq'
+#semfunc_subdir = '/local/scratch/gete2/variational/simplevec'
 #basic_length=6
-subdir = 'meanfield_freq_card'
-semfunc_subdir = 'simplevec_card'
-basic_length = 7
+#subdir = 'meanfield_freq_card'
+#semfunc_subdir = 'simplevec_card'
+#basic_length = 7
 
 for op_name, op in [('mul', operator.mul),
                     ('add', operator.add),
@@ -270,14 +274,14 @@ for op_name, op in [('mul', operator.mul),
                     ('harm', harm),
                     ('prop', prop)]:
     score_filename = 'scores_'+op_name
-    scores_op = get_scores(subdir, score_filename)
-    #add_scores(scores_op, subdir, method='implies', bias_method='frequency', op=op, semfunc_subdir=semfunc_subdir, basic_length=basic_length)
-    #save_scores(scores_op, subdir, score_filename)
+    scores = get_scores(filename=score_filename)
+    add_semfunc_scores(scores, op=op)
+    save_scores(scores, filename=score_filename)
     
-    av_scores_op = get_av_scores(scores_op, basic_length-1)
+    av_scores_op = get_av_scores(scores)
     print(op_name, 'best:')
-    for i in [0,1,2,4]:
+    for i in [0,1,2,4,5,6,7,8]:
         print(get_max(av_scores_op, i))
-    print(get_max(av_scores_op, [0,1,2]))
+    print(get_max(av_scores_op, [0,1,2,4,5]))
 
 

@@ -408,7 +408,7 @@ def with_lookup_for_relpron(old_fn, lookup):
             # TODO - instead, use an an empty semfunc, or use an approximate match
             return 0
         
-        return old_fn(*transformed, *args, **kwargs)
+        return old_fn(*transformed, **kwargs)
     
     return new_fn
 
