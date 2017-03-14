@@ -60,18 +60,26 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     if vectors is None:
         with gzip.open(os.path.join(AUX_DIR, directory, name+'.pkl.gz'), 'rb') as f:
             all_vectors = pickle.load(f)
-        vectors = all_vectors[pred_list]
-        del all_vectors  # Conserve memory
+        if isinstance(all_vectors, np.ndarray):
+            vectors = all_vectors[pred_list]
+            del all_vectors  # Conserve memory
+        elif isinstance(all_vectors, dict):
+            vectors = np.array([all_vectors[i] for i in pred_list])
+        else:
+            raise TypeError
     # Multiply by the scale factor
     vec = vectors * scale
+    
+    # Don't use negative weights in bias calculation
+    vec_for_bias = vec.clip(0)
     
     # Define bias of predicates
     
     if bias_method == 'target':
         # Maximum activation of each predicate
-        high = np.partition(vec, -C, axis=1)[:,-C:].sum(axis=1)
+        high = np.partition(vec_for_bias, -C, axis=1)[:,-C:].sum(axis=1)
         # Average activation if the top units are not used but still nouny/verby
-        other = (vec.sum(1) - high) / (dim - C) * C
+        other = (vec_for_bias.sum(1) - high) / (dim - C) * C
         # Minimum pred bias makes an average predicate have the target energy
         bias = other + target
         # For preds with a bigger gap between max and other activation,
@@ -85,7 +93,7 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
         if freq is None:
             freq = get_verb_noun_freq(prefix, thresh, pred_list)
         ent = np.ones(dim * 2) * C/dim
-        bias = np.dot(vec, ent) + np.log(1 / freq / (1 + Z * freq ** -alpha) - 1)
+        bias = np.dot(vec_for_bias, ent) + np.log(1 / freq / (1 + Z * freq ** -alpha) - 1)
     
     else:
         raise ValueError('bias method not recognised')
@@ -168,7 +176,7 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, wrong_w
     ent = {}
     for i, sf in zip(pred_list, semfuncs):
         if verbose: print(i)
-        ent[i] = mean_field(sf, C, prob_ratio=ratio[verbs[i]], **mean_field_kwargs)
+        ent[i] = mean_field(sf, C, prob_ratio=ratio[verbs[i]], verbose=verbose, **mean_field_kwargs)
     
     # Save to disk
     
@@ -190,7 +198,7 @@ if __name__ == "__main__":
     Cs = [30, 40, 50]
     targets = [None]
     Zs = [0.0001, 0.001, 0.01]
-    alphas = [0, 0.6, 0.7, 0.75, 0.8, 0.9, 1]
+    alphas = [0, 0.6, 0.8, 1]
     wrong_weights = [1, 4, 16]
     
     grid = product(bias_method, scales, Cs, targets, Zs, alphas)
@@ -201,9 +209,9 @@ if __name__ == "__main__":
     simplevec_filtered = []
     for name in simplevec:
         parts = name.split('-')
-        if len(parts) != 7:
+        if len(parts) != 8:
             continue
-        prefix, thresh, dim, k, a, smoothing, seed = parts
+        prefix, thresh, dim, k, a, right_smooth, all_smooth, seed = parts
         #if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['075','08','09','1']:
         simplevec_filtered.append(name.split('.')[0])
     
@@ -214,5 +222,5 @@ if __name__ == "__main__":
         print(hyper, simplevec_name)
         get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield')
     
-    with Pool(16) as p:
+    with Pool(32) as p:
         p.starmap(train, full_grid)
