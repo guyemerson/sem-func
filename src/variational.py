@@ -27,6 +27,7 @@ def get_semfunc(pred_wei, pred_bias):
     # Record zero and nonzero indices, for convenience
     prob.nonzero = pred_wei.nonzero()[0]
     prob.zero = (pred_wei == 0).nonzero()[0]
+    # TODO tweak for negative weights?
     return prob
 
 def init_vec(pred_wei, C=None, max_value=0.5):
@@ -214,14 +215,25 @@ def update(vec, semfunc, C, new_value_fn, prob_ratio=None):
     # If prob_ratio is given, we also need to make sure these components have the same value
     if prob_ratio is None:
         zero = semfunc.zero
+        extra_zero = None
         nonzero = semfunc.nonzero
     else:
-        zero_bool = (semfunc.wei == 0) * (prob_ratio == prob_ratio.min())
-        zero = zero_bool.nonzero()[0]
-        nonzero = np.invert(zero_bool).nonzero()[0]
+        zero_bool = (semfunc.wei == 0)
+        dim = vec.size // 2
+        ratio1 = prob_ratio[:dim].min()
+        ratio2 = prob_ratio[dim:].min()
+        min_ratio = min(ratio1, ratio2)
+        extra_ratio = max(ratio1, ratio2)
+        zero_min_bool = zero_bool * (prob_ratio == min_ratio)
+        zero_extra_bool = zero_bool * (prob_ratio == extra_ratio)
+        zero = zero_min_bool.nonzero()[0]
+        extra_zero = zero_extra_bool.nonzero()[0]
+        nonzero = np.invert(zero_min_bool + zero_extra_bool).nonzero()[0]
     
     if zero.size:
         new[zero] = new_value_fn(new, semfunc, zero[0], C, prob_ratio=prob_ratio)
+    if extra_zero is not None and extra_zero.size:
+        new[extra_zero] = new_value_fn(new, semfunc, extra_zero[0], C, prob_ratio=prob_ratio)
     # Update non-zero entries
     for i in nonzero:
         new[i] = new_value_fn(new, semfunc, i, C, prob_ratio=prob_ratio)
@@ -257,14 +269,14 @@ def mean_field(semfunc, C, prob_ratio=None, max_iter=50, delta=10**-4, init_max_
             print('min', new.min())
             print('max', new.max())
             print('sum', new.sum())
-            print('prob', semfunc(new))
+            print('prob', semfunc(marginal_approx(new, C)))
         
         vec = new
         if diff < delta:
             break
     else:
         print('max iter reached with delta {}'.format(diff))
-         
+    
     return vec
 
 def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, init_max_value=0.5, vecs=None, new_value_fn=new_value_approx, verbose=False):
@@ -321,7 +333,7 @@ def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, i
                 print('min', new.min())
                 print('max', new.max())
                 print('sum', new.sum())
-                print('prob', sf(new))
+                print('prob', sf(marginal_approx(new, C)))
             
             vecs[i] = new
             max_diff = max(diff, max_diff)
