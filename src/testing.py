@@ -35,8 +35,8 @@ def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, **kwargs
     """
     av_precision = []
     for term in term_to_properties:
-        substituted_items = ((which, term, triple) for which, triple in items)
-        all_scores = scores(score_fn, substituted_items, **kwargs)
+        pairs = ((term, item) for item in items)
+        all_scores = scores(score_fn, pairs, **kwargs)
         ranking = list(reversed(all_scores.argsort()))
         positions = sorted([ranking.index(i) for i in term_to_properties[term]])
         precision = [(i+1)/(pos+1) for i, pos in enumerate(positions)]
@@ -575,5 +575,31 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False):
         :return: mean average precision
         """
         wrapped_score_fn = with_lookup_for_relpron(score_fn, freq_lookup)
-        return evaluate_relpron(wrapped_score_fn, *data)
+        mean_av_prec = evaluate_relpron(wrapped_score_fn, *data)
+        print(mean_av_prec)
+        return mean_av_prec
+    return test
+
+def get_test_relpron_hypernym(prefix='multicore', thresh=5, testset=False):
+    """
+    Get a testing function for a specific pred lookup
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :param testset: whether to use the testset (default devset)
+    """
+    freq_lookup = load_freq_lookup_dicts(prefix, thresh)['n']
+    # Get data and convert to required form for mean-average-precision evaluation
+    term_to_hypernym = get_relpron_hyper(testset)
+    hypernyms = sorted(set(term_to_hypernym.values()))
+    term_to_hyp_index = {t:[hypernyms.index(h)] for t, h in term_to_hypernym.items()}
+    def test(score_fn):
+        """
+        Test a implications on the relpron hypernyms
+        :param score_fn: function from (term, hypernym) to score
+        :return: mean average precision
+        """
+        wrapped_score_fn = with_lookup(score_fn, freq_lookup)
+        mean_av_prec = evaluate_relpron(wrapped_score_fn, hypernyms, term_to_hyp_index)
+        print(mean_av_prec)
+        return mean_av_prec
     return test
