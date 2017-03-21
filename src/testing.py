@@ -26,13 +26,15 @@ def evaluate(sim, pairs, gold, **kwargs):
     """
     return spearmanr(gold, scores(sim, pairs, **kwargs))
 
-def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, **kwargs):
+def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, very_verbose=False, **kwargs):
     """
     Calculate mean average precision (MAP) for finding properties of terms
-    :param score_fn: function from (which, term, (verb, agent, patient)) to score
+    :param score_fn: function from (term, (which, (verb, agent, patient))) to score
     :param items: list of (which, (verb, agent, patient)) tuples
     :param term_to_properties: mapping from terms to indices of the items list
     """
+    if very_verbose:
+        kwargs['verbose'] = True
     av_precision = []
     for term in term_to_properties:
         pairs = ((term, item) for item in items)
@@ -45,6 +47,8 @@ def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, **kwargs
             print('average precision for {}: {}'.format(term, av_prec))
         av_precision.append(av_prec)
     return sum(av_precision)/len(av_precision)
+
+# TODO assume an oracle for hypernymy detection
 
 # Evaluation datasets
 
@@ -390,25 +394,30 @@ def with_lookup_for_relpron(old_fn, lookup):
     """
     Wrap a similarity function, looking up a pred for each given lemma,
     returning 0 if the lemma was not found
-    :param old_fn: function mapping (which, term, triple) to scores
+    :param old_fn: function mapping (term, description) to scores
     :param lookup: mapping from lemmas to sets of indices, separately for nouns and verbs
     :return: similarity function
     """
-    def new_fn(which, term, triple, **kwargs):
+    def new_fn(term, description, verbose=False, **kwargs):
         "Calculate score"
-        verb, agent, patient = triple
+        if verbose:
+            print(term, description)
+        which, (verb, agent, patient) = description
         try:
-            transformed = (which,
-                          lookup['n'][term],
-                          (lookup['v'][verb],
-                           lookup['n'][agent],
-                           lookup['n'][patient]))
+            transformed = (lookup['n'][term],
+                           (which,
+                            (lookup['v'][verb],
+                             lookup['n'][agent],
+                             lookup['n'][patient])))
         except KeyError:
             # Unknown lemmas
             # TODO - instead, use an an empty semfunc, or use an approximate match
             return 0
         
-        return old_fn(*transformed, **kwargs)
+        score = old_fn(*transformed, **kwargs)
+        if verbose:
+            print(score)
+        return score
     
     return new_fn
 
@@ -568,14 +577,14 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False):
     """
     freq_lookup = load_freq_lookup_dicts(prefix, thresh)
     data = get_relpron_separated(testset)
-    def test(score_fn):
+    def test(score_fn, **kwargs):
         """
         Test a scoring function on the relpron data
         :param score_fn: function from (which, term, (verb, agent, patient)) to score
         :return: mean average precision
         """
         wrapped_score_fn = with_lookup_for_relpron(score_fn, freq_lookup)
-        mean_av_prec = evaluate_relpron(wrapped_score_fn, *data)
+        mean_av_prec = evaluate_relpron(wrapped_score_fn, *data, **kwargs)
         print(mean_av_prec)
         return mean_av_prec
     return test

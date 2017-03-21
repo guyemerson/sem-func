@@ -31,12 +31,12 @@ def get_verb_noun_freq(prefix='multicore', thresh=5, pred_list=None):
     freq = np.array(freq, dtype='float')  # to allow division
     freq[verbs] /= freq[verbs].sum()
     freq[nouns] /= freq[nouns].sum()
-    if pred_list is None:
+    if pred_list is False:
         return freq
     else:
         return freq[pred_list]
 
-def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, freq=None, as_dict=False, directory='simplevec'):
+def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, alpha=None, pred_list=None, vectors=None, freq=None, as_dict=False, include_bias=False, directory='simplevec'):
     """
     Get semantic functions from given weights
     :param name: name of parameter file
@@ -48,7 +48,8 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     :param alpha: smoothing of frequency in generation (only for bias method 'frequency')
     :param pred_list: list of predicates to use
     :param as_dict: return as a dict (default as a list)
-    :return: semantic functions
+    :param include_bias: return all biases as an array
+    :return: semantic functions (, bias)
     """
     prefix, thresh, dim, *_ = name.split('-')
     dim = int(dim)
@@ -61,8 +62,11 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
         with gzip.open(os.path.join(AUX_DIR, directory, name+'.pkl.gz'), 'rb') as f:
             all_vectors = pickle.load(f)
         if isinstance(all_vectors, np.ndarray):
-            vectors = all_vectors[pred_list]
-            del all_vectors  # Conserve memory
+            if pred_list is False:
+                vectors = all_vectors
+            else:
+                vectors = all_vectors[pred_list]
+                del all_vectors  # Conserve memory
         elif isinstance(all_vectors, dict):
             vectors = np.array([all_vectors[i] for i in pred_list])
         else:
@@ -100,9 +104,14 @@ def get_semfuncs_from_vectors(name, bias_method, scale, C, target=None, Z=None, 
     
     # Define semantic functions
     if as_dict:
-        return {i:get_semfunc(v,b) for i,v,b in zip(pred_list, vec, bias)}
+        semfuncs = {i:get_semfunc(v,b) for i,v,b in zip(pred_list, vec, bias)}
     else:
-        return [get_semfunc(v,b) for v,b in zip(vec, bias)]
+        semfuncs = [get_semfunc(v,b) for v,b in zip(vec, bias)]
+    
+    if include_bias:
+        return semfuncs, bias
+    else:
+        return semfuncs
 
 def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, wrong_weight=0, name=None, basic_settings=None,
                  pred_list=None, mean_field_kwargs=None, output_dir='meanfield', input_dir='simplevec', skip_if_exists=True, bias_suffix='bias', verbose=False):
@@ -155,9 +164,10 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, wrong_w
     
     # Load model
     if verbose: print("Loading model")
-    semfuncs = get_semfuncs_from_vectors(name, bias_method, scale, C, target, Z, alpha, pred_list, directory=input_dir)
+    semfuncs, biases = get_semfuncs_from_vectors(name, bias_method, scale, C, target, Z, alpha, pred_list, directory=input_dir, include_bias=True)
     # Save biases
-    biases = {i:sf.bias for i, sf in zip(pred_list, semfuncs)}
+    if pred_list:
+        biases = {i:b for i, b in zip(pred_list, biases)}
     with gzip.open(os.path.join(AUX_DIR, output_dir, '{}-{}.pkl.gz'.format(fullname, bias_suffix)), 'wb') as f:
         pickle.dump(biases, f)
     
@@ -173,8 +183,13 @@ def get_entities(bias_method, scale, C, target=None, Z=None, alpha=None, wrong_w
     if verbose: print("Calculating entity vectors")
     if mean_field_kwargs is None:
         mean_field_kwargs = {}
-    ent = {}
-    for i, sf in zip(pred_list, semfuncs):
+    if pred_list is False:
+        ent = np.zeros((len(semfuncs), dim*2))
+        semfunc_iterator = enumerate(semfuncs)
+    else:
+        ent = {}
+        semfunc_iterator = zip(pred_list, semfuncs)
+    for i, sf in semfunc_iterator:
         if verbose: print(i)
         ent[i] = mean_field(sf, C, prob_ratio=ratio[verbs[i]], verbose=verbose, **mean_field_kwargs)
     
@@ -194,14 +209,14 @@ if __name__ == "__main__":
     # Grid search over hyperparameters
     
     bias_method = ['frequency']
-    scales = [0.8, 1, 1.2]
+    scales = [1]
     Cs = [30, 40, 50]
     targets = [None]
     Zs = [0.0001, 0.001, 0.01]
-    alphas = [0, 0.6, 0.8, 1]
+    alphas = [1]
     wrong_weights = [1, 4, 16]
     
-    grid = product(bias_method, scales, Cs, targets, Zs, alphas)
+    grid = product(bias_method, scales, Cs, targets, Zs, alphas, wrong_weights)
     
     # Vector models
     
@@ -212,15 +227,22 @@ if __name__ == "__main__":
         if len(parts) != 8:
             continue
         prefix, thresh, dim, k, a, right_smooth, all_smooth, seed = parts
-        #if prefix == 'multicore' and thresh == '5' and dim == '400' and k == '0' and a in ['075','08','09','1']:
-        simplevec_filtered.append(name.split('.')[0])
+        if all([k == '0',
+                right_smooth == '0']):
+            simplevec_filtered.append(name.split('.')[0])
     
     full_grid = list(product(grid, simplevec_filtered))
     shuffle(full_grid)
     
     def train(hyper, simplevec_name):
         print(hyper, simplevec_name)
+        if hyper[5] == 0:
+            hyper = list(hyper)
+            hyper[4] *= 1000
+        elif hyper[5] == 0.6:
+            hyper = list(hyper)
+            hyper[4] *= 10
         get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield')
     
-    with Pool(32) as p:
+    with Pool(16) as p:
         p.starmap(train, full_grid)
