@@ -52,8 +52,9 @@ def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
     # Set up semantic functions
     semfuncs = [get_semfunc(pred_wei[i], pred_bias[i]) for i in range(len(pred_wei))]
     # Set up constant function
-    zero_ent = np.zeros(pred_wei.shape[1])
-    constant = get_semfunc(zero_ent, 0)
+    D = pred_wei.shape[1]
+    constant = get_semfunc(np.zeros(D), 0)
+    av_ent = np.ones(D) * (C/D)
     
     def meanfield(triple, **kwargs):
         """
@@ -67,7 +68,7 @@ def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
         for i in triple:
             if i is None:
                 sf.append(constant)
-                vecs.append(zero_ent)
+                vecs.append(av_ent)
             else:
                 sf.append(semfuncs[i])
                 vecs.append(init_vecs[i]) 
