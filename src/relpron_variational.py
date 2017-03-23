@@ -38,8 +38,46 @@ def get_scoring_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
     
     return score
 
-# TODO allow decreasing the bias for hypernyms
-# TODO combine with normal vectors for relatedness (could also rank separately and combine ranks)
+def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
+    """
+    Get a function mapping vso triples to meanfield vectors
+    :param pred_wei: weights of semantic functions
+    :param pred_bias: biases of semantic functions
+    :param link_wei: link weight matrix
+    :param ent_bias: entity bias
+    :param C: total cardinality
+    :param init_vecs: zero-context mean-field vectors, by pred index
+    :return: scoring function
+    """
+    # Set up semantic functions
+    semfuncs = [get_semfunc(pred_wei[i], pred_bias[i]) for i in range(len(pred_wei))]
+    # Set up constant function
+    zero_ent = np.zeros(pred_wei.shape[1])
+    constant = get_semfunc(zero_ent, 0)
+    
+    def meanfield(triple, **kwargs):
+        """
+        Calculate meanfield vectors for the triple.
+        For OOV items, the semfunc is a constant function.
+        :param triple: (verb, agent, patient)
+        :return: probability
+        """
+        sf = []
+        vecs = []
+        for i in triple:
+            if i is None:
+                sf.append(constant)
+                vecs.append(zero_ent)
+            else:
+                sf.append(semfuncs[i])
+                vecs.append(init_vecs[i]) 
+        meanfield = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
+        return meanfield
+    
+    return meanfield
+
+# TODO (above two functions): allow decreasing the bias for hypernyms
+# TODO (top function only): combine with normal vectors for relatedness (could also rank separately and combine ranks)
 
 def get_baseline_scoring_fn(pred_wei, pred_bias, C, ent_vecs):
     """
@@ -144,3 +182,41 @@ def load_baseline_scoring_fn(*args, **kwargs):
     :return: scoring function
     """
     return get_baseline_scoring_fn(*load_baseline_model(*args, **kwargs))
+
+
+if __name__ == "__main__":
+    # Load test data and lookup dicts
+    from testing import get_relpron_separated, load_freq_lookup_dicts
+    raw_props, _ = get_relpron_separated()
+    lookup = load_freq_lookup_dicts()
+    # Convert to indices
+    props = [(which, (lookup['v'].get(verb),
+                      lookup['n'].get(agent),
+                      lookup['n'].get(patient)))
+             for which, (verb, agent, patient) in raw_props]
+    
+    def apply_model(filename):
+        "Calculate meanfield vectors for a given model"
+        # Load model
+        print('loading')
+        meanfield_fn = get_meanfield_fn(*load_model(filename))
+        # Get meanfield vectors
+        print('calculating')
+        vecs = [meanfield_fn(triple, max_iter=500) for _, triple in props]
+        # Save vectors
+        print('saving')
+        with gzip.open(os.path.join(AUX_DIR, 'meanfield_relpron', filename+'.pkl.gz'), 'wb') as f:
+            pickle.dump(vecs, f)
+    
+    # Process files
+    from multiprocessing import Pool
+    from random import shuffle
+    files = []
+    for fullname in os.listdir(os.path.join(AUX_DIR, 'meanfield_link')):
+        name = fullname.split('.')[0]
+        if name.split('-')[-1] not in ['raw', 'bias']:
+            files.append(name)
+    shuffle(files)
+    
+    with Pool(16) as p:
+        p.map(apply_model, files)

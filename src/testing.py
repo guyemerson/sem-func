@@ -130,7 +130,7 @@ def get_relpron(testset=False):
     """
     Get RelPron data
     :param testset: use testset (default, use devset)
-    :return: list of triples (SBJ-or-OBJ, target noun, verb-subject-object triple)
+    :return: list of: (term, (SBJ-or-OBJ, (verb, subject, object)))
     """
     if testset:
         subset = 'testset'
@@ -151,7 +151,7 @@ def get_relpron(testset=False):
                 verb = second
                 obj = head
             # Strip "_N:", "_N", "_V"
-            items.append((which, noun[:-3], (verb[:-2], subj[:-2], obj[:-2])))
+            items.append((noun[:-3], (which, (verb[:-2], subj[:-2], obj[:-2]))))
     return items
 
 def get_relpron_hyper(testset=False):
@@ -182,9 +182,9 @@ def get_relpron_separated(testset=False):
     items = get_relpron(testset)
     reduced_items = []
     term_to_properties = defaultdict(set)
-    for i, (which, term, triple) in enumerate(items):
+    for i, (term, description) in enumerate(items):
         term_to_properties[term].add(i)
-        reduced_items.append((which, triple))
+        reduced_items.append(description)
     return reduced_items, term_to_properties
 
 # Lookup
@@ -288,7 +288,7 @@ def get_relpron_preds(prefix='multicore', thresh=5, include_test=True, include_d
     preds = set()
     OOV = set()
     
-    for _, target, (verb, agent, patient) in data:
+    for target, (_, (verb, agent, patient)) in data:
         for pos, x in [('v', verb),
                        ('n', target),
                        ('n', agent),
