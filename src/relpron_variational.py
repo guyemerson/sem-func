@@ -56,7 +56,7 @@ def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
     constant = get_semfunc(np.zeros(D), 0)
     av_ent = np.ones(D) * (C/D)
     
-    def meanfield(triple, **kwargs):
+    def meanfield_fn(triple, **kwargs):
         """
         Calculate meanfield vectors for the triple.
         For OOV items, the semfunc is a constant function.
@@ -72,10 +72,10 @@ def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
             else:
                 sf.append(semfuncs[i])
                 vecs.append(init_vecs[i]) 
-        meanfield = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
-        return meanfield
+        meanfield_vecs = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
+        return meanfield_vecs
     
-    return meanfield
+    return meanfield_fn
 
 # TODO (above two functions): allow decreasing the bias for hypernyms
 # TODO (top function only): combine with normal vectors for relatedness (could also rank separately and combine ranks)
@@ -196,28 +196,35 @@ if __name__ == "__main__":
                       lookup['n'].get(patient)))
              for which, (verb, agent, patient) in raw_props]
     
-    def apply_model(filename):
+    def apply_model(filename, bias_shift, subdir='meanfield_relpron'):
         "Calculate meanfield vectors for a given model"
+        if os.path.exists(os.path.join(AUX_DIR, subdir, filename+'.pkl.gz')):
+            return
         # Load model
-        print('loading')
-        meanfield_fn = get_meanfield_fn(*load_model(filename))
+        fullname = filename + '-' + str(bias_shift).replace('.','_').replace('-','~')
+        print('loading', filename, bias_shift)
+        params = list(load_model(filename))
+        params[3] -= bias_shift
+        meanfield_fn = get_meanfield_fn(*params)
         # Get meanfield vectors
-        print('calculating')
+        print('calculating', fullname)
         vecs = [meanfield_fn(triple, max_iter=500) for _, triple in props]
         # Save vectors
-        print('saving')
-        with gzip.open(os.path.join(AUX_DIR, 'meanfield_relpron', filename+'.pkl.gz'), 'wb') as f:
+        print('saving', fullname)
+        with gzip.open(os.path.join(AUX_DIR, subdir, fullname+'.pkl.gz'), 'wb') as f:
             pickle.dump(vecs, f)
     
     # Process files
     from multiprocessing import Pool
     from random import shuffle
+    from itertools import product
     files = []
     for fullname in os.listdir(os.path.join(AUX_DIR, 'meanfield_link')):
         name = fullname.split('.')[0]
         if name.split('-')[-1] not in ['raw', 'bias']:
             files.append(name)
-    shuffle(files)
+    files_and_shifts = list(product(files, [0.0, 0.5, 1.0]))
+    shuffle(files_and_shifts)
     
     with Pool(16) as p:
-        p.map(apply_model, files)
+        p.starmap(apply_model, files_and_shifts)
