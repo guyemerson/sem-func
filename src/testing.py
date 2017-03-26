@@ -568,7 +568,7 @@ def get_test_all(prefix='multicore', thresh=5):
     
     return test_all
 
-def get_test_relpron(prefix='multicore', thresh=5, testset=False):
+def get_test_relpron(prefix='multicore', thresh=5, testset=False, indices_only=True):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
@@ -577,6 +577,11 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False):
     """
     freq_lookup = load_freq_lookup_dicts(prefix, thresh)
     data = get_relpron_separated(testset)
+    if indices_only:
+        convert = {'SBJ': 1, 'OBJ': 2}
+        reduced_items, term_to_properties = data
+        indexed_items = [(convert[which], i) for i, (which, _) in enumerate(reduced_items)]
+        data = (indexed_items, term_to_properties)
     def test(score_fn, **kwargs):
         """
         Test a scoring function on the relpron data

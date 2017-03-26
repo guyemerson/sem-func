@@ -132,7 +132,8 @@ def marginal_approx(prob, C):
     :param C: total cardinality
     :return: marginal probabilities
     """
-    scaled = prob / prob.sum() * C
+    factor = C / prob.sum()
+    scaled = prob * factor
     np.clip(scaled, 0, 1, scaled)
     # (This may leave the total below C)
     return scaled
@@ -337,6 +338,8 @@ def mean_field_vso(semfuncs, link_wei, ent_bias, C, max_iter=50, delta=10**-4, i
             
             vecs[i] = new
             max_diff = max(diff, max_diff)
+        if verbose:
+            print('max diff', max_diff)
         if max_diff < delta:
             break
     else:

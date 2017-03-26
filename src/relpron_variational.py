@@ -3,40 +3,31 @@ import os, gzip, pickle, numpy as np
 from variational import mean_field_vso, marginal_approx, get_semfunc
 from __config__.filepath import AUX_DIR
 
-def get_scoring_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
+def get_scoring_fn(pred_wei, pred_bias, C, meanfield_vecs):
     """
     Get a scoring function for the relpron dataset
     :param pred_wei: weights of semantic functions
     :param pred_bias: biases of semantic functions
-    :param link_wei: link weight matrix
-    :param ent_bias: entity bias
     :param C: total cardinality
-    :param init_vecs: zero-context mean-field vectors, by pred index
+    :param meanfield_vecs: mean-field vectors for relpron triples
     :return: scoring function
     """
     # Set up semantic functions
     semfuncs = [get_semfunc(pred_wei[i], pred_bias[i]) for i in range(len(pred_wei))]
+    # Get marginal distributions
+    marg = [[marginal_approx(prob, C) for prob in triple] for triple in meanfield_vecs]
     
-    def score(term, description, **kwargs):
+    def scoring_fn(term, description, **kwargs):
         """
-        Calculate how much the triple implies the target
+        Calculate how much the triple implies the term
         :param term: noun index
-        :param description: (SBJ-or-OBJ, (verb, agent, patient))
+        :param description: (index-of-SBJ-or-OBJ, index-of-triple)
         :return: probability
         """
-        which, triple = description
-        sf = [semfuncs[i] for i in triple]
-        vecs = [init_vecs[i] for i in triple]
-        meanfield = mean_field_vso(sf, link_wei, ent_bias, C=C, vecs=vecs, **kwargs)
-        marg = [marginal_approx(prob, C) for prob in meanfield]
-        if which == 'SBJ':
-            return semfuncs[term](marg[1])
-        elif which == 'OBJ':
-            return semfuncs[term](marg[2])
-        else:
-            raise ValueError(which)
+        which, index = description
+        return semfuncs[term](marg[index][which])
     
-    return score
+    return scoring_fn
 
 def get_meanfield_fn(pred_wei, pred_bias, link_wei, ent_bias, C, init_vecs):
     """
@@ -167,13 +158,32 @@ def load_baseline_model(name, pred_wei_dir='simplevec_all', meanfield_dir='meanf
     
     return pred_wei, pred_bias, C, init_vecs
 
-def load_scoring_fn(*args, **kwargs):
+def load_scoring_fn(name, pred_wei_dir='simplevec_all', bias_dir='meanfield_all', meanfield_dir='meanfield_relpron', basic_length=8, bias_length=13, C_index=9):
     """
-    Load a scoring function from file.
-    All arguments are passed to load_model
+    Load a scoring function from file
+    :param name: filename of full model (without file extension)
+    :param pred_wei_dir: directory for pred weights
+    :param bias_dir: direcotory for biases
+    :param meanfield_dir: directory for meanfield vectors
+    :param basic_length: number of settings for predicate weights
+    :param bias_length: number of settings for biases
+    :param C_index: index of setting for cardinality
     :return: scoring function
     """
-    return get_scoring_fn(*load_model(*args, **kwargs))
+    parts = name.split('-')
+    basic_name = '-'.join(parts[:basic_length])
+    bias_name = '-'.join(parts[:bias_length])
+    
+    C = int(parts[C_index])
+    
+    with gzip.open(os.path.join(AUX_DIR, pred_wei_dir, basic_name+'.pkl.gz'), 'rb') as f:
+        pred_wei = pickle.load(f)
+    with gzip.open(os.path.join(AUX_DIR, bias_dir, bias_name+'-bias.pkl.gz'), 'rb') as f:
+        pred_bias = pickle.load(f)
+    with gzip.open(os.path.join(AUX_DIR, meanfield_dir, name+'.pkl.gz'), 'rb') as f:
+        vecs = pickle.load(f)
+    
+    return get_scoring_fn(pred_wei, pred_bias, C, vecs)
 
 
 def load_baseline_scoring_fn(*args, **kwargs):
