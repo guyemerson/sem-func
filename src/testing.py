@@ -390,7 +390,7 @@ def from_index(old_fn, pred_name):
         return old_fn(pred_name[a], pred_name[b], *args, **kwargs)
     return sim_fn
 
-def with_lookup_for_relpron(old_fn, lookup):
+def with_lookup_for_relpron(old_fn, lookup, indices_only=True):
     """
     Wrap a similarity function, looking up a pred for each given lemma,
     returning 0 if the lemma was not found
@@ -398,20 +398,24 @@ def with_lookup_for_relpron(old_fn, lookup):
     :param lookup: mapping from lemmas to sets of indices, separately for nouns and verbs
     :return: similarity function
     """
+    if indices_only:
+        lookup_triple = lambda x:x
+    else:
+        lookup_triple = lambda verb, agent, patient : (lookup['v'][verb], lookup['n'][agent], lookup['n'][patient])
+    
     def new_fn(term, description, verbose=False, **kwargs):
         "Calculate score"
         if verbose:
             print(term, description)
-        which, (verb, agent, patient) = description
+        which, triple = description
         try:
             transformed = (lookup['n'][term],
                            (which,
-                            (lookup['v'][verb],
-                             lookup['n'][agent],
-                             lookup['n'][patient])))
+                            lookup_triple(triple)))
         except KeyError:
             # Unknown lemmas
-            # TODO - instead, use an an empty semfunc, or use an approximate match
+            if verbose:
+                print('OOV')
             return 0
         
         score = old_fn(*transformed, **kwargs)
