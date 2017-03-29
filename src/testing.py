@@ -26,15 +26,14 @@ def evaluate(sim, pairs, gold, **kwargs):
     """
     return spearmanr(gold, scores(sim, pairs, **kwargs))
 
-def evaluate_relpron(score_fn, items, term_to_properties, verbose=True, very_verbose=False, **kwargs):
+def evaluate_relpron(score_fn, items, term_to_properties, verbose=False, **kwargs):
     """
     Calculate mean average precision (MAP) for finding properties of terms
     :param score_fn: function from (term, (which, (verb, agent, patient))) to score
     :param items: list of (which, (verb, agent, patient)) tuples
     :param term_to_properties: mapping from terms to indices of the items list
     """
-    if very_verbose:
-        kwargs['verbose'] = True
+    kwargs['verbose'] = verbose
     av_precision = []
     for term in term_to_properties:
         pairs = ((term, item) for item in items)
