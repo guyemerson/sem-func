@@ -33,7 +33,8 @@ def evaluate_relpron(score_fn, items, term_to_properties, verbose=False, **kwarg
     :param items: list of (which, (verb, agent, patient)) tuples
     :param term_to_properties: mapping from terms to indices of the items list
     """
-    kwargs['verbose'] = verbose
+    if verbose:
+        kwargs['verbose'] = verbose
     av_precision = []
     for term in term_to_properties:
         pairs = ((term, item) for item in items)
@@ -593,7 +594,7 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False, indices_only=T
         """
         wrapped_score_fn = with_lookup_for_relpron(score_fn, freq_lookup)
         mean_av_prec = evaluate_relpron(wrapped_score_fn, *data, **kwargs)
-        print(mean_av_prec)
+        #print(mean_av_prec)
         return mean_av_prec
     return test
 
@@ -617,6 +618,36 @@ def get_test_relpron_hypernym(prefix='multicore', thresh=5, testset=False):
         """
         wrapped_score_fn = with_lookup(score_fn, freq_lookup)
         mean_av_prec = evaluate_relpron(wrapped_score_fn, hypernyms, term_to_hyp_index)
-        print(mean_av_prec)
+        #print(mean_av_prec)
+        return mean_av_prec
+    return test
+
+def get_test_relpron_ensemble(prefix='multicore', thresh=5, testset=False):
+    """
+    Get a testing function for a specific pred lookup
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :param testset: whether to use the testset (default devset)
+    """
+    freq_lookup = load_freq_lookup_dicts(prefix, thresh)
+    data = get_relpron_separated(testset)
+    convert_which = {'SBJ': 1, 'OBJ': 2}
+    reduced_items, _ = data
+    convert_description = {(which, triple):(convert_which[which], i) for i, (which, triple) in enumerate(reduced_items)}
+    def test(score_fn, basic_score_fn, weight=0.5, score_kwargs={}, basic_score_kwargs={}, **kwargs):
+        """
+        Test a scoring function on the relpron data
+        :param score_fn: function from (which, term, (verb, agent, patient)) to score
+        :return: mean average precision
+        """
+        wrapped_score_fn = with_lookup_for_relpron(score_fn, freq_lookup)
+        def ensemble_score_fn(term, description):
+            "Return a weighted geometric mean of two score functions"
+            score = wrapped_score_fn(term, convert_description[description], **score_kwargs)
+            basic_score = basic_score_fn(term, description, **basic_score_kwargs)
+            combined_score = weight * np.log(score) + (1-weight) * np.log(basic_score)
+            return combined_score
+        mean_av_prec = evaluate_relpron(ensemble_score_fn, *data, **kwargs)
+        #print(mean_av_prec)
         return mean_av_prec
     return test
