@@ -1,11 +1,12 @@
 import os, pickle, gzip, numpy as np
 
 from relpron_variational import load_scoring_fn, load_baseline_scoring_fn
-from testing import get_test_relpron, get_relpron_separated, load_freq_lookup_dicts
+from testing import get_test_relpron, get_test_relpron_ensemble, get_relpron_separated, load_freq_lookup_dicts
 from __config__.filepath import AUX_DIR
 from utils import cosine
 
 test_fn = get_test_relpron()
+test_ensemble = get_test_relpron_ensemble()
 raw_items, term_to_props = get_relpron_separated()
 lookup = load_freq_lookup_dicts()
 
@@ -51,6 +52,10 @@ def convert_name(name):
         else:
             parts.append(int(p))
     return tuple(parts)
+
+def convert_settings(settings):
+    "Convert a tuple of values to a hyphen-separated name"
+    return '-'.join(str(x).replace('-','~').replace('.','_') for x in settings)
 
 def add_scores(scores, subdir='meanfield_relpron'):
     "Add newly calculated scores"
@@ -130,13 +135,32 @@ save_scores(scores)
 #score_fn = load_baseline_scoring_fn('multicore-5-400-0-1-0-0-32-1_0-40-0_01-1_0-4_0')
 #test_fn(score_fn)
 
-from testing import get_test_relpron_ensemble
 
-test_ensemble = get_test_relpron_ensemble()
+# Ensemble
 
 addition = addition_score_fn(load_vector_model())
-semfunc = load_scoring_fn('multicore-5-400-0-1-0-0-32-1_0-30-0_01-1_0-4_0-0_5-0_2-0_5')
 
-for x in np.arange(0, 0.5, 0.01):
-    print(x, test_ensemble(semfunc, addition, x, basic_score_kwargs={'verb_weight': 0.9, 'head_weight':0.8}))
-    print(x, test_ensemble(semfunc, addition, x, basic_score_kwargs={'verb_weight': 0.6, 'head_weight':1.5}))
+sorted_settings = sorted(scores, key=lambda x:scores[x])
+
+from itertools import product
+
+ensemble_scores = get_scores(filename='scores_ensemble')
+
+prev_settings = None
+for settings, ratio, verb_wei, head_wei in product(sorted_settings[-20:],
+                                                   np.arange(0.06, 0.261, 0.04),
+                                                   np.arange(0.6, 1.01, 0.2),
+                                                   np.arange(0.6, 1.01, 0.2)):
+    full_settings = settings + (ratio, verb_wei, head_wei)
+    if full_settings in ensemble_scores:
+        continue
+    print(settings)
+    print(ratio, verb_wei, head_wei)
+    if prev_settings != settings:
+        semfunc = load_scoring_fn(convert_settings(settings))
+    prev_settings = settings
+    score = test_ensemble(semfunc, addition, ratio, basic_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
+    print(score)
+    ensemble_scores[full_settings] = score
+
+save_scores(ensemble_scores, filename='scores_ensemble')
