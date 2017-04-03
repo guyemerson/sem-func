@@ -60,9 +60,9 @@ def observe_links(filename, offset=0., input_dir='meanfield_all', output_dir='me
     # Chunk pairs
     def chunk(data):
         "Chunk a dictionary into lists of items"
-        it = iter(data)
+        iterator = iter(data.items())
         for _ in range(0, len(data), chunk_size):
-            yield [(x, data[x]) for x in islice(it, chunk_size)]
+            yield list(islice(iterator, chunk_size))
     # Spawn workers
     for label, label_pairs in enumerate(pairs):
         with Pool(processes, get_work_fn, (D, ent, offset)) as p:
