@@ -75,7 +75,7 @@ def observe_links(filename, offset=0., input_dir='meanfield_all', output_dir='me
     
     # Save all parameters to file
     
-    fullname = filename + str(offset).replace('.','_').replace('-','~')
+    fullname = filename + '-' + str(offset).replace('.','_').replace('-','~')
     with gzip.open(os.path.join(AUX_DIR, output_dir, fullname+'-raw.pkl.gz'), 'wb') as f:
         pickle.dump(link_freq, f)
 
