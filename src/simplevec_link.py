@@ -5,7 +5,7 @@ from multiprocessing import Pool
 from __config__.filepath import AUX_DIR
 
 # The following two functions are used by observe_links
-def get_work_fn(D, ent, offset):
+def get_work_fn(D, ent):
     "Define a work function in each worker process"
     global work
     def work(data):
@@ -13,7 +13,7 @@ def get_work_fn(D, ent, offset):
         link_subtotal = np.zeros((D,D))
         n_subtotal = 0
         for (verb, noun), n in data:
-            link_subtotal += n * (np.outer(ent[verb], ent[noun]) - offset).clip(0)
+            link_subtotal += n * np.outer(ent[verb], ent[noun]).clip(0)
             n_subtotal += n
         return link_subtotal, n_subtotal
 
@@ -21,7 +21,7 @@ def do_work(data):
     "Use the work function that was initialised"
     return work(data)
 
-def observe_links(filename, offset=0., input_dir='meanfield_all', output_dir='meanfield_link', C_index=9, chunk_size=100, processes=32):
+def observe_links(filename, input_dir='meanfield_all', output_dir='meanfield_link', C_index=9, chunk_size=100, processes=32):
     """
     Observe connections between meanfield entities, and save observed frequencies to file
     :param filename: filename without file extension
@@ -65,7 +65,7 @@ def observe_links(filename, offset=0., input_dir='meanfield_all', output_dir='me
             yield list(islice(iterator, chunk_size))
     # Spawn workers
     for label, label_pairs in enumerate(pairs):
-        with Pool(processes, get_work_fn, (D, ent, offset)) as p:
+        with Pool(processes, get_work_fn, (D, ent)) as p:
             for link_subtotal, n_subtotal in p.imap_unordered(do_work, chunk(label_pairs)):
                 link_total[label] += link_subtotal
                 n_total[label] += n_subtotal
@@ -75,8 +75,7 @@ def observe_links(filename, offset=0., input_dir='meanfield_all', output_dir='me
     
     # Save all parameters to file
     
-    fullname = filename + '-' + str(offset).replace('.','_').replace('-','~')
-    with gzip.open(os.path.join(AUX_DIR, output_dir, fullname+'-raw.pkl.gz'), 'wb') as f:
+    with gzip.open(os.path.join(AUX_DIR, output_dir, filename+'-raw.pkl.gz'), 'wb') as f:
         pickle.dump(link_freq, f)
 
 if __name__ == "__main__":
@@ -84,7 +83,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Fit link weights")
     parser.add_argument('filename')
-    parser.add_argument('offset', type=float, default=0.)
     args = parser.parse_args()
     
-    observe_links(args.filename, args.offset, output_dir='meanfield_link_offset')
+    observe_links(args.filename, output_dir='meanfield_link')

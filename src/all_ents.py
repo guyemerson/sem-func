@@ -3,7 +3,7 @@ import argparse
 from simplevec_to_entity import get_entities
 from simplevec_link import observe_links
 
-parser = argparse.ArgumentParser(description="Fit link weights")
+parser = argparse.ArgumentParser(description="Calculate all meanfield vectors")
 parser.add_argument('short')
 parser.add_argument('long')
 args = parser.parse_args()
