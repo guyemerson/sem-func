@@ -196,24 +196,31 @@ def load_baseline_scoring_fn(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    # Load test data and lookup dicts
-    from testing import get_relpron_separated, load_freq_lookup_dicts
-    raw_props, _ = get_relpron_separated()
-    lookup = load_freq_lookup_dicts()
+    from testing import get_relpron_separated, get_GS2011_indexed, load_freq_lookup_dicts
+    
+    LINK_DIR = 'meanfield_link'
+    OUTPUT_DIR = 'meanfield_relpron'
+    
+    # Choose dataset
+    raw_triples, _ = get_relpron_separated()
+    #raw_triples, _ = get_relpron_separated(True)
+    #raw_triples, _ = get_GS2011_indexed()    
+    
     # Convert to indices
+    lookup = load_freq_lookup_dicts()
     props = [(which, (lookup['v'].get(verb),
                       lookup['n'].get(agent),
                       lookup['n'].get(patient)))
-             for which, (verb, agent, patient) in raw_props]
+             for which, (verb, agent, patient) in raw_triples]
     
-    def apply_model(filename, bias_shift, subdir='meanfield_relpron'):
+    def apply_model(filename, bias_shift):
         "Calculate meanfield vectors for a given model"
-        if os.path.exists(os.path.join(AUX_DIR, subdir, filename+'.pkl.gz')):
+        if os.path.exists(os.path.join(AUX_DIR, OUTPUT_DIR, filename+'.pkl.gz')):
             return
         # Load model
         fullname = filename + '-' + str(bias_shift).replace('.','_').replace('-','~')
         print('loading', filename, bias_shift)
-        params = list(load_model(filename))
+        params = list(load_model(filename, link_wei_dir=LINK_DIR))
         params[3] -= bias_shift
         meanfield_fn = get_meanfield_fn(*params)
         # Get meanfield vectors
@@ -221,7 +228,7 @@ if __name__ == "__main__":
         vecs = [meanfield_fn(triple, max_iter=500) for _, triple in props]
         # Save vectors
         print('saving', fullname)
-        with gzip.open(os.path.join(AUX_DIR, subdir, fullname+'.pkl.gz'), 'wb') as f:
+        with gzip.open(os.path.join(AUX_DIR, OUTPUT_DIR, fullname+'.pkl.gz'), 'wb') as f:
             pickle.dump(vecs, f)
     
     # Process files
@@ -229,11 +236,11 @@ if __name__ == "__main__":
     from random import shuffle
     from itertools import product
     files = []
-    for fullname in os.listdir(os.path.join(AUX_DIR, 'meanfield_link')):
+    for fullname in os.listdir(os.path.join(AUX_DIR, LINK_DIR)):
         name = fullname.split('.')[0]
         if name.split('-')[-1] not in ['raw', 'bias']:
             files.append(name)
-    files_and_shifts = list(product(files, [0.0, 0.5, 1.0]))
+    files_and_shifts = list(product(files, [0.5, 0.8]))
     shuffle(files_and_shifts)
     
     with Pool(16) as p:

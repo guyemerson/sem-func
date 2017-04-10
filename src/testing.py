@@ -187,6 +187,45 @@ def get_relpron_separated(testset=False):
         reduced_items.append(description)
     return reduced_items, term_to_properties
 
+def get_GS2011():
+    """
+    Get GS2011 data
+    :return: (pairs-of-vso-triples, scores, high-bools)
+    """
+    pairs = []
+    scores = []
+    highs = []
+    with open('../data/Oxford/GS2011data.txt', 'r') as f:
+        f.readline()
+        for line in f:
+            _, v1, s, o, v2, sim, hilo = line.split()
+            pairs.append(((v1,s,o), (v2,s,o)))
+            scores.append(sim)
+            highs.append(hilo == 'HIGH')
+    return pairs, scores, highs
+
+def get_GS2011_indexed():
+    """
+    Get GS2011 data, assigning an index to each unique triple
+    :return: (vso_triples, (pairs-of-indices, scores))
+    """
+    triple_pairs, scores, _ = get_GS2011()
+    triples = []
+    triple_to_index = {}
+    index_pairs = []
+    for pair in triple_pairs:
+        indices = []
+        for trip in pair:
+            if trip in triple_to_index:
+                i = triple_to_index[trip]
+            else:
+                i = len(triples)
+                triples.append(trip)
+                triple_to_index[trip] = i
+            indices.append(i)
+        index_pairs.append(tuple(indices))
+    return triples, (index_pairs, scores)
+
 # Lookup
 
 def get_pred_dict(pred_name):
@@ -577,6 +616,7 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False, indices_only=T
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
     :param thresh: frequency threshold
+    :param indices_only: only pass indices of triples, not the triples themselves (default True)
     :param testset: whether to use the testset (default devset)
     """
     freq_lookup = load_freq_lookup_dicts(prefix, thresh)
@@ -650,4 +690,27 @@ def get_test_relpron_ensemble(prefix='multicore', thresh=5, testset=False):
         mean_av_prec = evaluate_relpron(ensemble_score_fn, *data, **kwargs)
         #print(mean_av_prec)
         return mean_av_prec
+    return test
+
+def get_test_GS2011(prefix='multicore', thresh=5, indices_only=True):
+    """
+    Get a testing function for a specific pred lookup
+    :param prefix: name of dataset
+    :param thresh: frequency threshold
+    :param indices_only: only pass indices of triples, not the triples themselves (default True)
+    """
+    if indices_only:
+        _, data = get_GS2011_indexed()
+    else:
+        data = get_GS2011()[:2]
+        freq_lookup = load_freq_lookup_dicts(prefix, thresh)
+        raise Exception('Not implemented')
+
+    def test(score_fn, **kwargs):
+        """
+        Test a scoring function on the GS2011 data
+        :param score_fn: function from pairs of triple indices to scores
+        :return: Spearman rank correlation 
+        """
+        return evaluate(score_fn, *data)
     return test
