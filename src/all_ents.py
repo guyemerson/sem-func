@@ -6,6 +6,7 @@ from simplevec_link import observe_links
 parser = argparse.ArgumentParser(description="Calculate all meanfield vectors")
 parser.add_argument('short')
 parser.add_argument('long')
+parser.add_argument('proc', type=int, default=4)
 args = parser.parse_args()
 
 parts = [x.replace('~','-').replace('_','.') for x in args.long.split('-')]
@@ -29,4 +30,4 @@ get_entities('frequency',
              output_dir='meanfield_all',
              pred_list=False)
 
-observe_links(full)
+observe_links(full, processes=args.proc)

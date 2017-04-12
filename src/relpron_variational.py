@@ -199,11 +199,11 @@ if __name__ == "__main__":
     from testing import get_relpron_separated, get_GS2011_indexed, load_freq_lookup_dicts
     
     LINK_DIR = 'meanfield_link'
-    OUTPUT_DIR = 'meanfield_relpron'
+    OUTPUT_DIR = 'meanfield_relpron_test'
     
     # Choose dataset
-    raw_triples, _ = get_relpron_separated()
-    #raw_triples, _ = get_relpron_separated(True)
+    #raw_triples, _ = get_relpron_separated()
+    raw_triples, _ = get_relpron_separated(True)
     #raw_triples, _ = get_GS2011_indexed()    
     
     # Convert to indices
@@ -231,10 +231,14 @@ if __name__ == "__main__":
         with gzip.open(os.path.join(AUX_DIR, OUTPUT_DIR, fullname+'.pkl.gz'), 'wb') as f:
             pickle.dump(vecs, f)
     
+    apply_model('multicore-5-400-0-1-0-0-32-1_0-30-0_01-1_0-4_0-0_5-0_2', 0.5)
+    
+    """
     # Process files
     from multiprocessing import Pool
     from random import shuffle
     from itertools import product
+    
     files = []
     for fullname in os.listdir(os.path.join(AUX_DIR, LINK_DIR)):
         name = fullname.split('.')[0]
@@ -245,3 +249,4 @@ if __name__ == "__main__":
     
     with Pool(16) as p:
         p.starmap(apply_model, files_and_shifts)
+    """

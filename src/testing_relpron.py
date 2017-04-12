@@ -5,14 +5,22 @@ from testing import get_test_relpron, get_test_relpron_ensemble, get_relpron_sep
 from __config__.filepath import AUX_DIR
 from utils import cosine
 
-test_fn = get_test_relpron()
-test_ensemble = get_test_relpron_ensemble()
-raw_items, term_to_props = get_relpron_separated()
-lookup = load_freq_lookup_dicts()
+test_fn = {False: get_test_relpron(),
+           True: get_test_relpron(testset=True)}
+test_ensemble = {False: get_test_relpron_ensemble(),
+                 True: get_test_relpron_ensemble(testset=True)}
 
-terms = [lookup['n'][t] for t in term_to_props.keys()]
+lookup = load_freq_lookup_dicts()
+raw_items_dev, term_to_props_dev = get_relpron_separated()
+raw_items_test, term_to_props_test = get_relpron_separated(True)
+raw_items = {False: raw_items_dev, True: raw_items_test}
+term_to_props = {False: term_to_props_dev, True: term_to_props_test}
+
+terms = {testset:[lookup['n'][t] for t in t2p.keys()]
+         for testset, t2p in term_to_props.items()}
 convert_which = {'SBJ': 1, 'OBJ': 2}
-items = [(convert_which[which], i) for i, (which, _) in enumerate(raw_items)]
+items = {testset:[(convert_which[which], i) for i, (which, _) in enumerate(ri)]
+         for testset, ri in raw_items.items()} 
 
 def get_scores(subdir='meanfield_relpron', filename='scores'):
     "Get previously calculated scores"
@@ -23,7 +31,7 @@ def get_scores(subdir='meanfield_relpron', filename='scores'):
     except FileNotFoundError:
         return {}
 
-def cache_scores(input_dir='meanfield_relpron', output_dir='meanfield_relpron_cache_dev'):
+def cache_scores(input_dir='meanfield_relpron', output_dir='meanfield_relpron_cache_dev', test=False):
     "Cache scores for each term and item"
     cached = set(os.listdir(os.path.join(AUX_DIR, output_dir)))
     new = set(os.listdir(os.path.join(AUX_DIR, input_dir)))
@@ -35,7 +43,7 @@ def cache_scores(input_dir='meanfield_relpron', output_dir='meanfield_relpron_ca
         name = filename.split('.')[0]
         print(name)
         score_fn = load_scoring_fn(name, meanfield_dir=input_dir)
-        scores = {t:[score_fn(t,x) for x in items] for t in terms}
+        scores = {t:[score_fn(t,x) for x in items[test]] for t in terms[test]}
         # Save scores
         with gzip.open(os.path.join(AUX_DIR, output_dir, filename), 'wb') as f:
             pickle.dump(scores, f)
@@ -57,7 +65,7 @@ def convert_settings(settings):
     "Convert a tuple of values to a hyphen-separated name"
     return '-'.join(str(x).replace('-','~').replace('.','_') for x in settings)
 
-def add_scores(scores, subdir='meanfield_relpron'):
+def add_scores(scores, subdir='meanfield_relpron', testset=False):
     "Add newly calculated scores"
     for filename in os.listdir(os.path.join(AUX_DIR, subdir)):
         # Skip score files
@@ -70,10 +78,10 @@ def add_scores(scores, subdir='meanfield_relpron'):
             continue
         # Get score
         score_fn = load_scoring_fn(string_name, meanfield_dir=subdir)
-        scores[tuple_name] = test_fn(score_fn)
+        scores[tuple_name] = test_fn[testset](score_fn)
         print(tuple_name)
 
-def add_scores_from_cache(scores, subdir='meanfield_relpron', cache_subdir='meanfield_relpron_cache_dev'):
+def add_scores_from_cache(scores, subdir='meanfield_relpron', cache_subdir='meanfield_relpron_cache_dev', testset=False):
     "Add newly calculated scores from cache"
     for filename in os.listdir(os.path.join(AUX_DIR, subdir)):
         # Skip score files
@@ -90,7 +98,7 @@ def add_scores_from_cache(scores, subdir='meanfield_relpron', cache_subdir='mean
             "Fetch a score from the cache"
             _, index = description
             return cache[term][index]
-        scores[tuple_name] = test_fn(score_fn)
+        scores[tuple_name] = test_fn[testset](score_fn)
         print(tuple_name)
 
 def save_scores(scores, subdir='meanfield_relpron', filename='scores'):
@@ -128,13 +136,16 @@ def addition_score_fn(vec):
     return score_fn
 
 if __name__ == "__main__":
-    MEANFIELD_DIR = 'meanfield_relpron_offset'
-    CACHE_DIR = 'meanfield_relpron_offset_cache_dev'
+    MEANFIELD_DIR = 'meanfield_relpron_test'
+    CACHE_DIR = 'meanfield_relpron_cache_test'
+    TEST = True
     
-    cache_scores(MEANFIELD_DIR, CACHE_DIR)
+    cache_scores(MEANFIELD_DIR, CACHE_DIR, TEST)
     scores = get_scores(MEANFIELD_DIR)
-    add_scores_from_cache(scores, MEANFIELD_DIR, CACHE_DIR)
+    add_scores_from_cache(scores, MEANFIELD_DIR, CACHE_DIR, TEST)
     save_scores(scores, MEANFIELD_DIR)
+    
+    print(scores)
     
     #score_fn = load_baseline_scoring_fn('multicore-5-400-0-1-0-0-32-1_0-40-0_01-1_0-4_0')
     #test_fn(score_fn)
@@ -152,9 +163,9 @@ if __name__ == "__main__":
     
     prev_settings = None
     for settings, ratio, verb_wei, head_wei in product(sorted_settings[-1:],
-                                                       np.arange(0.18, 0.261, 0.01),
-                                                       np.arange(0.7, 1.11, 0.05),
-                                                       np.arange(0.7, 1.11, 0.05)):
+                                                       np.arange(0.22, 0.251, 0.01),
+                                                       np.arange(0.8, 1.01, 0.1),
+                                                       np.arange(0.8, 1.01, 0.1)):
         full_settings = settings + (ratio, verb_wei, head_wei)
         if full_settings in ensemble_scores:
             continue
@@ -163,7 +174,7 @@ if __name__ == "__main__":
         if prev_settings != settings:
             semfunc = load_scoring_fn(convert_settings(settings), meanfield_dir=MEANFIELD_DIR)
         prev_settings = settings
-        score = test_ensemble(semfunc, addition, ratio, basic_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
+        score = test_ensemble[TEST](semfunc, addition, ratio, basic_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
         print(score)
         ensemble_scores[full_settings] = score
     
