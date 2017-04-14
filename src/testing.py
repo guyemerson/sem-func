@@ -616,8 +616,8 @@ def get_test_relpron(prefix='multicore', thresh=5, testset=False, indices_only=T
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
     :param thresh: frequency threshold
-    :param indices_only: only pass indices of triples, not the triples themselves (default True)
     :param testset: whether to use the testset (default devset)
+    :param indices_only: only pass indices of triples, not the triples themselves (default True)
     """
     freq_lookup = load_freq_lookup_dicts(prefix, thresh)
     data = get_relpron_separated(testset)
@@ -674,18 +674,24 @@ def get_test_relpron_ensemble(prefix='multicore', thresh=5, testset=False):
     convert_which = {'SBJ': 1, 'OBJ': 2}
     reduced_items, _ = data
     convert_description = {(which, triple):(convert_which[which], i) for i, (which, triple) in enumerate(reduced_items)}
-    def test(score_fn, basic_score_fn, weight=0.5, score_kwargs={}, basic_score_kwargs={}, **kwargs):
+    def test(cached_score_fns, direct_score_fns, weight=0.5, cached_score_kwargs={}, direct_score_kwargs={}, **kwargs):
         """
         Test a scoring function on the relpron data
-        :param score_fn: function from (which, term, (verb, agent, patient)) to score
+        :param cached_score_fns: list of functions mapping (which, term_index, triple_index) to score
+        :param direct_score_fns: list of functions mapping (which, term, (verb, agent, patient)) to score
+        :param weight: how much to use the cached score functions rather than the direct score functions
+        :param cached_score_kwargs: keyword arguments to pass to cached score functions
+        :param direct_score_kwargs: keyword arguments to pass to direct score functions
+        Additional keyword arguments are passed to evaluate_relpron
         :return: mean average precision
         """
-        wrapped_score_fn = with_lookup_for_relpron(score_fn, freq_lookup)
+        wrapped_score_fns = [with_lookup_for_relpron(fn, freq_lookup) for fn in cached_score_fns]
         def ensemble_score_fn(term, description):
-            "Return a weighted geometric mean of two score functions"
-            score = wrapped_score_fn(term, convert_description[description], **score_kwargs)
-            basic_score = basic_score_fn(term, description, **basic_score_kwargs)
-            combined_score = weight * np.log(score) + (1-weight) * np.log(basic_score)
+            "Return a weighted geometric mean of two sets of score functions"
+            cached_scores = [fn(term, convert_description[description], **cached_score_kwargs) for fn in wrapped_score_fns]
+            direct_scores = [fn(term, description, **direct_score_kwargs) for fn in direct_score_fns]
+            combined_score = weight * np.log(cached_scores).mean() \
+                             + (1-weight) * np.log(direct_scores).mean()
             return combined_score
         mean_av_prec = evaluate_relpron(ensemble_score_fn, *data, **kwargs)
         #print(mean_av_prec)

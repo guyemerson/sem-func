@@ -98,8 +98,10 @@ def add_scores_from_cache(scores, subdir='meanfield_relpron', cache_subdir='mean
             "Fetch a score from the cache"
             _, index = description
             return cache[term][index]
-        scores[tuple_name] = test_fn[testset](score_fn)
+        new_score = test_fn[testset](score_fn)
+        scores[tuple_name] = new_score 
         print(tuple_name)
+        print(new_score)
 
 def save_scores(scores, subdir='meanfield_relpron', filename='scores'):
     "Get previously calculated scores"
@@ -136,16 +138,14 @@ def addition_score_fn(vec):
     return score_fn
 
 if __name__ == "__main__":
-    MEANFIELD_DIR = 'meanfield_relpron_test'
-    CACHE_DIR = 'meanfield_relpron_cache_test'
-    TEST = True
+    MEANFIELD_DIR = 'meanfield_relpron'
+    CACHE_DIR = 'meanfield_relpron_cache_dev'
+    TEST = False
     
     cache_scores(MEANFIELD_DIR, CACHE_DIR, TEST)
     scores = get_scores(MEANFIELD_DIR)
     add_scores_from_cache(scores, MEANFIELD_DIR, CACHE_DIR, TEST)
     save_scores(scores, MEANFIELD_DIR)
-    
-    print(scores)
     
     #score_fn = load_baseline_scoring_fn('multicore-5-400-0-1-0-0-32-1_0-40-0_01-1_0-4_0')
     #test_fn(score_fn)
@@ -159,6 +159,19 @@ if __name__ == "__main__":
     
     from itertools import product
     
+    top_settings = sorted_settings[-6:]
+    for s in top_settings:
+        print(s)
+    top_semfunc = [load_scoring_fn(convert_settings(s), meanfield_dir=MEANFIELD_DIR) for s in top_settings]
+    
+    for ratio, verb_wei, head_wei in product(np.arange(0.17, 0.211, 0.01),
+                                             np.arange(0.7, 1.11, 0.1),
+                                             np.arange(0.7, 1.11, 0.1)):
+        print(ratio, verb_wei, head_wei)
+        score = test_ensemble[TEST](top_semfunc, [addition], ratio, direct_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
+        print(score)
+    
+    """
     ensemble_scores = get_scores(MEANFIELD_DIR, 'scores_ensemble')
     
     prev_settings = None
@@ -174,8 +187,9 @@ if __name__ == "__main__":
         if prev_settings != settings:
             semfunc = load_scoring_fn(convert_settings(settings), meanfield_dir=MEANFIELD_DIR)
         prev_settings = settings
-        score = test_ensemble[TEST](semfunc, addition, ratio, basic_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
+        score = test_ensemble[TEST]([semfunc], [addition], ratio, direct_score_kwargs={'verb_weight': verb_wei, 'head_weight': head_wei})
         print(score)
         ensemble_scores[full_settings] = score
     
     save_scores(ensemble_scores, MEANFIELD_DIR, 'scores_ensemble')
+    """
