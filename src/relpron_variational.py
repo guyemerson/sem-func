@@ -158,7 +158,7 @@ def load_baseline_model(name, pred_wei_dir='simplevec_all', meanfield_dir='meanf
     
     return pred_wei, pred_bias, C, init_vecs
 
-def load_scoring_fn(name, pred_wei_dir='simplevec_all', bias_dir='meanfield_all', meanfield_dir='meanfield_relpron', basic_length=8, bias_length=13, C_index=9):
+def load_weights_and_vectors(name, pred_wei_dir='simplevec_all', bias_dir='meanfield_all', meanfield_dir='meanfield_relpron', basic_length=8, bias_length=13, C_index=9):
     """
     Load a scoring function from file
     :param name: filename of full model (without file extension)
@@ -168,7 +168,7 @@ def load_scoring_fn(name, pred_wei_dir='simplevec_all', bias_dir='meanfield_all'
     :param basic_length: number of settings for predicate weights
     :param bias_length: number of settings for biases
     :param C_index: index of setting for cardinality
-    :return: scoring function
+    :return: pred_weights, pred_biases, cardinality, meanfield_vectors
     """
     parts = name.split('-')
     basic_name = '-'.join(parts[:basic_length])
@@ -183,7 +183,15 @@ def load_scoring_fn(name, pred_wei_dir='simplevec_all', bias_dir='meanfield_all'
     with gzip.open(os.path.join(AUX_DIR, meanfield_dir, name+'.pkl.gz'), 'rb') as f:
         vecs = pickle.load(f)
     
-    return get_scoring_fn(pred_wei, pred_bias, C, vecs)
+    return pred_wei, pred_bias, C, vecs
+
+def load_scoring_fn(*args, **kwargs):
+    """
+    Load a scoring function from file
+    Arguments are passed to load_weights_and_vectors
+    :return: scoring function
+    """
+    return get_scoring_fn(load_weights_and_vectors(*args, **kwargs))
 
 
 def load_baseline_scoring_fn(*args, **kwargs):

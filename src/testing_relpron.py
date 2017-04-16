@@ -1,7 +1,7 @@
 import os, pickle, gzip, numpy as np
 
 from relpron_variational import load_scoring_fn, load_baseline_scoring_fn
-from testing import get_test_relpron, get_test_relpron_ensemble, get_relpron_separated, load_freq_lookup_dicts
+from testing import get_test_relpron, get_test_relpron_ensemble, get_relpron_separated, load_freq_lookup_dicts, convert_name, convert_settings
 from __config__.filepath import AUX_DIR
 from utils import cosine
 
@@ -47,23 +47,6 @@ def cache_scores(input_dir='meanfield_relpron', output_dir='meanfield_relpron_ca
         # Save scores
         with gzip.open(os.path.join(AUX_DIR, output_dir, filename), 'wb') as f:
             pickle.dump(scores, f)
-
-def convert_name(name):
-    "Convert a hyphen-separated name to a tuple of values"
-    string_parts = [p.replace('_','.').replace('~','-') for p in name.split('-')]
-    parts = []
-    for p in string_parts:
-        if p.isalpha():
-            parts.append(p)
-        elif '.' in p:
-            parts.append(float(p))
-        else:
-            parts.append(int(p))
-    return tuple(parts)
-
-def convert_settings(settings):
-    "Convert a tuple of values to a hyphen-separated name"
-    return '-'.join(str(x).replace('-','~').replace('.','_') for x in settings)
 
 def add_scores(scores, subdir='meanfield_relpron', testset=False):
     "Add newly calculated scores"

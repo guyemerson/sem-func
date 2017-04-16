@@ -720,3 +720,22 @@ def get_test_GS2011(prefix='multicore', thresh=5, indices_only=True):
         """
         return evaluate(score_fn, *data)
     return test
+
+# File name manipulation
+
+def convert_name(name):
+    "Convert a hyphen-separated name to a tuple of values"
+    string_parts = [p.replace('_','.').replace('~','-') for p in name.split('-')]
+    parts = []
+    for p in string_parts:
+        if p.isalpha():
+            parts.append(p)
+        elif '.' in p:
+            parts.append(float(p))
+        else:
+            parts.append(int(p))
+    return tuple(parts)
+
+def convert_settings(settings):
+    "Convert a tuple of values to a hyphen-separated name"
+    return '-'.join(str(x).replace('-','~').replace('.','_') for x in settings)
