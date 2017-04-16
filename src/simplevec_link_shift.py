@@ -2,8 +2,8 @@ import os, pickle, gzip, numpy as np
 
 from __config__.filepath import AUX_DIR
 
-k_range = [0.0, 0.5, 1.0, 1.35]
-scale_range = [0.2, 0.5, 0.8, 1.0, 1.2]
+k_range = [0.5, 0.8]
+scale_range = [0.1, 0.2]
 
 SUBDIR = 'meanfield_link'
 

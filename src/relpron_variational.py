@@ -199,41 +199,41 @@ if __name__ == "__main__":
     from testing import get_relpron_separated, get_GS2011_indexed, load_freq_lookup_dicts
     
     LINK_DIR = 'meanfield_link'
-    OUTPUT_DIR = 'meanfield_relpron_test'
+    OUTPUT_DIR = 'meanfield_gs2011'
     
     # Choose dataset
     #raw_triples, _ = get_relpron_separated()
-    raw_triples, _ = get_relpron_separated(True)
-    #raw_triples, _ = get_GS2011_indexed()    
+    #raw_triples, _ = get_relpron_separated(True)
+    #raw_triples = [t for _,t in raw_triples]
+    
+    raw_triples, _ = get_GS2011_indexed()    
     
     # Convert to indices
     lookup = load_freq_lookup_dicts()
-    props = [(which, (lookup['v'].get(verb),
-                      lookup['n'].get(agent),
-                      lookup['n'].get(patient)))
-             for which, (verb, agent, patient) in raw_triples]
+    triples = [(lookup['v'].get(verb),
+                lookup['n'].get(agent),
+                lookup['n'].get(patient))
+               for verb, agent, patient in raw_triples]
     
     def apply_model(filename, bias_shift):
         "Calculate meanfield vectors for a given model"
-        if os.path.exists(os.path.join(AUX_DIR, OUTPUT_DIR, filename+'.pkl.gz')):
+        fullname = filename + '-' + str(bias_shift).replace('.','_').replace('-','~')
+        # Skip files that have already been processed
+        if os.path.exists(os.path.join(AUX_DIR, OUTPUT_DIR, fullname+'.pkl.gz')):
             return
         # Load model
-        fullname = filename + '-' + str(bias_shift).replace('.','_').replace('-','~')
         print('loading', filename, bias_shift)
         params = list(load_model(filename, link_wei_dir=LINK_DIR))
         params[3] -= bias_shift
         meanfield_fn = get_meanfield_fn(*params)
         # Get meanfield vectors
         print('calculating', fullname)
-        vecs = [meanfield_fn(triple, max_iter=500) for _, triple in props]
+        vecs = [meanfield_fn(t, max_iter=500) for t in triples]
         # Save vectors
         print('saving', fullname)
         with gzip.open(os.path.join(AUX_DIR, OUTPUT_DIR, fullname+'.pkl.gz'), 'wb') as f:
             pickle.dump(vecs, f)
     
-    apply_model('multicore-5-400-0-1-0-0-32-1_0-30-0_01-1_0-4_0-0_5-0_2', 0.5)
-    
-    """
     # Process files
     from multiprocessing import Pool
     from random import shuffle
@@ -242,11 +242,20 @@ if __name__ == "__main__":
     files = []
     for fullname in os.listdir(os.path.join(AUX_DIR, LINK_DIR)):
         name = fullname.split('.')[0]
-        if name.split('-')[-1] not in ['raw', 'bias']:
-            files.append(name)
-    files_and_shifts = list(product(files, [0.5, 0.8]))
+        settings = name.split('-')
+        # Only consider link weight files
+        if settings[-1] in ['raw', 'bias']:
+            continue
+        # Only load the models we want
+        if settings[4] != '1' or \
+           settings[9] != '30' or \
+           settings[13] != '0_5' or \
+           settings[14] != '0_2':
+            continue
+        files.append(name)
+    files_and_shifts = list(product(files, [0.8]))
     shuffle(files_and_shifts)
     
-    with Pool(16) as p:
+    with Pool(5) as p:
         p.starmap(apply_model, files_and_shifts)
-    """
+    

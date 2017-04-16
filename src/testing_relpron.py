@@ -138,9 +138,9 @@ def addition_score_fn(vec):
     return score_fn
 
 if __name__ == "__main__":
-    MEANFIELD_DIR = 'meanfield_relpron'
-    CACHE_DIR = 'meanfield_relpron_cache_dev'
-    TEST = False
+    MEANFIELD_DIR = 'meanfield_relpron_test'
+    CACHE_DIR = 'meanfield_relpron_cache_test'
+    TEST = True
     
     cache_scores(MEANFIELD_DIR, CACHE_DIR, TEST)
     scores = get_scores(MEANFIELD_DIR)
@@ -148,21 +148,28 @@ if __name__ == "__main__":
     save_scores(scores, MEANFIELD_DIR)
     
     #score_fn = load_baseline_scoring_fn('multicore-5-400-0-1-0-0-32-1_0-40-0_01-1_0-4_0')
-    #test_fn(score_fn)
+    #test_fn[TEST](score_fn)
     
     
     # Ensemble
     
     addition = addition_score_fn(load_vector_model())
     
+    """
     sorted_settings = sorted(scores, key=lambda x:scores[x])
-    
-    from itertools import product
-    
     top_settings = sorted_settings[-6:]
     for s in top_settings:
         print(s)
     top_semfunc = [load_scoring_fn(convert_settings(s), meanfield_dir=MEANFIELD_DIR) for s in top_settings]
+    """
+    
+    top_semfunc = [load_scoring_fn('multicore-5-400-0-1-0-0-{}-1_0-30-0_01-1_0-4_0-0_5-0_2-0_8'.format(s), meanfield_dir=MEANFIELD_DIR)
+                   for s in [8, 32, 64, 91, 97]]
+    
+    from itertools import product
+    
+    print(test_ensemble[TEST](top_semfunc, [addition], 1))
+    
     
     for ratio, verb_wei, head_wei in product(np.arange(0.17, 0.211, 0.01),
                                              np.arange(0.7, 1.11, 0.1),
