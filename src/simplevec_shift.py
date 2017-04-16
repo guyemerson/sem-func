@@ -14,10 +14,10 @@ dataset = prefix+'-'+thresh
 D = 400  # Number of dimensions for nouns and verbs (separately) 
 seed_range = [32, 8, 91, 64, 97]
 
-right_smooth_range = [0, 0.1, 1]  # Added to counts of the right type
-all_smooth_range = [10**-20, 10**-5]  # Added to all counts
+right_smooth_range = [0]  # Added to counts of the right type
+all_smooth_range = [0]  # Added to all counts
 a_range = [0.8, 1]  # Power that frequencies are raised to under the null hypothesis
-k_range = [-0.6, -0.3, 0, 0.3]  # (-log(2), if we have half-half nouns and verbs in the same space)
+k_range = [0]  # Negative offset for PMI scores
 
 # Load files
 
@@ -32,14 +32,13 @@ noun_ones = np.zeros(2*D)
 noun_ones[:D] = 1
 smoothing_array = np.outer(verb, verb_ones) + np.outer(noun, noun_ones)
 
-full_template = os.path.join(AUX_DIR, 'simplevec', '{}-{}-{}-{}.pkl.gz')
+full_template = os.path.join(AUX_DIR, 'simplevec_all', '{}-{}-{}-{}.pkl.gz')
 
 pred_list, _ = get_test_preds(prefix, thresh)
-    
-# Calculate PMI
-def pmi(obs_vec, a, right_smooth, all_smooth):
+
+def pmi(obs_vec, a=1, right_smooth=0, all_smooth=0):
     """
-    Calculate positive pointwise mutual information
+    Calculate pointwise mutual information
     (for verbs and nouns separately)
     :param obs_vec: observed numbers of contexts
     :param a: power to raise frequencies to, for smoothing
@@ -78,7 +77,7 @@ def pmi(obs_vec, a, right_smooth, all_smooth):
     return new
 
 
-def expand_seed(seed, clip=False):
+def expand_seed(seed, clip=True):
     print('seed:', seed)
     
     with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
@@ -104,10 +103,11 @@ def expand_seed(seed, clip=False):
                 new = new.clip(0, out=new)
             
             # Filter preds
-            filtered = {i: new[i] for i in pred_list}
+            #filtered = {i: new[i] for i in pred_list}
             
             with gzip.open(filename, 'wb') as f:
-                pickle.dump(filtered, f)
+                #pickle.dump(filtered, f)
+                pickle.dump(new, f)
 
 
 with Pool(5) as p:

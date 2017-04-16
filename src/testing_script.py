@@ -1,6 +1,7 @@
 import os, pickle, gzip, numpy as np, operator
+from itertools import product
 
-from testing import get_test_all, get_test_preds #, get_test_all
+from testing import get_test_all, get_test_preds, get_test_relpron_hypernym
 from __config__.filepath import AUX_DIR, OUT_DIR
 from utils import cosine
 from simplevec_to_entity import get_verb_noun_freq
@@ -11,6 +12,7 @@ thresh = 5
 name = 'example'
 
 test_all = get_test_all(prefix, thresh)
+test_relpron_hypernym = get_test_relpron_hypernym(prefix, thresh)
 
 preds, _ = get_test_preds(prefix, thresh)
 pred_list = sorted(preds)
@@ -58,6 +60,32 @@ def test_all_implies(vec, sf, op=None, **kw):
         "Combined truth of a=>b and b=>a"
         return op(sf[a](vec[b]), sf[b](vec[a]))
     return test_all(sim, **kw)
+
+def test_hypernym(vec, sf, **kw):
+    """
+    Test semfunc model on finding hypernyms
+    :param vec: mean field posterior vectors
+    :param sf: semantic functions
+    :param **kw: additional keyword arguments passed to test_relpron_hypernym function
+    :return: mean average precision results
+    """
+    def implies(a,b):
+        "Probability that the truth of a implies the truth of b"
+        return sf[b](vec[a])
+    return test_relpron_hypernym(implies, **kw)
+
+def test_hypernym_reverse(vec, sf, **kw):
+    """
+    Test semfunc model on finding hypernyms
+    :param vec: mean field posterior vectors
+    :param sf: semantic functions
+    :param **kw: additional keyword arguments passed to test_relpron_hypernym function
+    :return: mean average precision results
+    """
+    def implies(a,b):
+        "Probability that the truth of b implies the truth of a"
+        return sf[a](vec[b])
+    return test_relpron_hypernym(implies, **kw)
 
 def implies_self(vec, sf):
     "Test each semantic function on its own meanfield vector"
@@ -148,34 +176,30 @@ def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanf
         # Test
         scores[settings] = test_fn(marginal_vec, semfuncs, **test_fn_kwargs)
 
-def get_av_scores(scores, seed_index=6):
+def get_av_scores(scores, index=7):
     "Average over random seeds"
     av_scores = {}
+    # Allow either a single index or a list of indices
+    if isinstance(index, int):
+        index = [index]
+    else:
+        index = sorted(index, reverse=True)
     # Group scores
     for settings, results in scores.items():
         # Get correlations (ignore significance values)
-        cor_arr = np.array([cor for cor, _ in results])
+        if isinstance(results, (list, tuple)):
+            cor_arr = np.array([cor for cor, _ in results])
+        else:
+            cor_arr = results
         # Filter seed from settings
-        nonseed_settings = settings[:seed_index] + settings[seed_index+1:]
+        nonseed_settings = settings
+        for i in index:
+            nonseed_settings = nonseed_settings[:i] + nonseed_settings[i+1:]
         # Append correlations to list (initialising if necessary)
         av_scores.setdefault(nonseed_settings, []).append(cor_arr)
     # Average scores
     for s, arrs in av_scores.items():
         av_scores[s] = (len(arrs), np.array(arrs).mean(0))
-    return av_scores
-
-def get_av_probs(scores, seed_index=6):
-    "Average over random seeds"
-    av_scores = {}
-    # Group scores
-    for settings, prob in scores.items():
-        # Filter seed from settings
-        nonseed_settings = settings[:seed_index] + settings[seed_index+1:]
-        # Append correlations to list (initialising if necessary)
-        av_scores.setdefault(nonseed_settings, []).append(prob)
-    # Average scores
-    for s, probs in av_scores.items():
-        av_scores[s] = (len(probs), sum(probs)/len(probs))
     return av_scores
 
 def get_max(av_scores, pos, constr=()):
@@ -190,13 +214,19 @@ def get_max(av_scores, pos, constr=()):
         "Give average score of considered positions, and only if constraints are satisfied"
         if any(s[i] != v for i,v in constr):
             return 0
+        elif pos is None:
+            return av_scores[s][1]
         elif isinstance(pos, (list, tuple)):
             return sum(av_scores[s][1][p] for p in pos)
         else:
             return av_scores[s][1][pos]
     # Get the best hyperparameters
     best = max(av_scores, key=key)
-    return best, av_scores[best][1][pos]
+    if pos is None:
+        return best, av_scores[best]
+    else:
+        b = av_scores[best]
+        return best, (b[0], b[1][pos])
 
 def harm(x,y):
     """Harmonic mean of x and y"""
@@ -252,10 +282,10 @@ for op_name, op in [('add', operator.add),
                        (7, [40, 80])])
     save_scores(scores_op, 'meanfield', score_filename)
     
-    av_scores_op = get_av_scores(scores_op)
+    av_scores = get_av_scores(scores_op)
     for i in [0,1,2,4]:
-        print(get_max(av_scores_op, i))
-    print(get_max(av_scores_op, [0,1,2,4]))
+        print(get_max(av_scores, i))
+    print(get_max(av_scores, [0,1,2,4]))
 """
 
 #subdir = '/local/scratch/gete2/variational/meanfield_freq'
@@ -264,7 +294,31 @@ for op_name, op in [('add', operator.add),
 #subdir = 'meanfield_freq_card'
 #semfunc_subdir = 'simplevec_card'
 #basic_length = 7
-""
+
+meanfield_subdir = 'meanfield'
+basic_length = 8
+kwargs = {
+    'param_subdir': 'simplevec',
+    'meanfield_subdir': meanfield_subdir,
+    'basic_length': basic_length,
+    'full_length': 13,
+    'C_index': 9
+}
+"""
+meanfield_subdir = '/local/scratch/gete2/variational/meanfield_freq'
+basic_length = 6
+kwargs = {
+    'param_subdir': '/local/scratch/gete2/variational/simplevec',
+    'meanfield_subdir': meanfield_subdir,
+    'basic_length': basic_length,
+    'full_length': 10,
+    'C_index': 7
+}
+"""
+#meanfield_subdir = 'meanfield_freq'
+#basic_length = 7
+#full_length = 11
+"""
 for op_name, op in [('mul', operator.mul),
                     ('add', operator.add),
                     ('min', min),
@@ -272,15 +326,91 @@ for op_name, op in [('mul', operator.mul),
                     ('harm', harm),
                     ('prop', prop)]:
     score_filename = 'scores_'+op_name
-    scores = get_scores('meanfield_freq', score_filename)
-    add_semfunc_scores(scores, op=op)
-    save_scores(scores, 'meanfield_freq', score_filename)
+    scores = get_scores(meanfield_subdir, score_filename)
+    #add_semfunc_scores(scores, op=op, **kwargs)
+    #save_scores(scores, meanfield_subdir, score_filename)
     
-    av_scores = get_av_scores(scores)
+    av_scores = get_av_scores(scores, kwargs['basic_length']-1)
     print(op_name, 'best:')
     for i in [0,1,2,4,5,6,7,8]:
         print(get_max(av_scores, i))
-    print(get_max(av_scores, [0,1,2,4,5]))
+    print(get_max(av_scores, [0,2,4,5]))
 
+
+"""
+scores = get_scores(meanfield_subdir, 'scores_mul')
+add_semfunc_scores(scores, op=operator.mul, **kwargs)
+save_scores(scores, meanfield_subdir, 'scores_mul')
+_scores = get_av_scores(scores, 0)
+for x in ['8','32','64','91','97']:
+    for i in [0,1,2,4,5]:
+        print(get_max(_scores, i, [(6, x)]))
+    print(get_max(_scores, [0,2,4,5], [(6, x)]))
+    print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01')]))
+    print(get_max(_scores, [0,2,4,5], [(6, x), (11, '4')]))
+    print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01'), (11, '4')]))
+
+"""
+scores = get_scores(meanfield_subdir, 'scores_hyper')
+add_semfunc_scores(scores, test_fn=test_hypernym, **kwargs)
+save_scores(scores, meanfield_subdir, 'scores_hyper')
+_scores = get_av_scores(scores, 0)
+for x in ['8','32','64','91','97']:
+    print(get_max(_scores, None, [(6, x)]))
+"""
+scores = get_scores(meanfield_subdir, 'scores_hyper_reverse')
+add_semfunc_scores(scores, test_fn=test_hypernym_reverse, **kwargs)
+save_scores(scores, meanfield_subdir, 'scores_hyper_reverse')
+_scores = get_av_scores(scores, 0)
+for x in ['8','32','64','91','97']:
+    print(get_max(_scores, None, [(6, x)]))
+
+self_prob = get_scores(meanfield_subdir, 'self_prob')
+add_semfunc_scores(self_prob, test_fn=implies_self, **kwargs)
+save_scores(self_prob, meanfield_subdir, 'self_prob')
+av_self_prob = get_av_scores(self_prob)
+
+"""
+av_scores = get_av_scores(scores, basic_length-1)
+
+av_av = get_av_scores(scores, [basic_length-1, kwargs['full_length']-1])
+
+hyper_range = [None, None, None,
+               [-1.5, -1, -0.6, -0.3, 0],
+               [0.8, 1],
+               [0, 0.1, 1, 3],
+               None,
+               [0.8, 1, 1.2],
+               [30, 40, 50],
+               [10., 1., 0.1, 0.01, 0.001, 0.0001],
+               [0, 0.6, 0.8, 1],]
+#               [1, 4, 16]]
+for pos, x_range in enumerate(hyper_range):
+    if x_range is None: continue
+    print('\n', pos, '\n')
+    for x in x_range:
+        print(x)
+        str_x = str(x).replace('-','~').replace('.','_')
+        #for i in [0,1,2,4,5,6,7,8]: 
+        #    print(get_max(av_av, i, [(pos, str_x)]))
+        print(get_max(av_av, None, [(pos, str_x)]))
+
+for pos in range(3,kwargs['full_length']):
+    rest = list(range(kwargs['full_length']))
+    rest.pop(pos)
+    av_rest = get_av_scores(scores, rest)
+    print(pos)
+    for val, score in av_rest.items():
+        print(val, score)
+        
 
 ""
+
+for k, C, Z in product(['0','~0_3'],['30','40','50'],['0_01','0_001','0_0001']):
+    print(k, C, Z)
+    try:
+        print(av_av['multicore', '5', '400', k, '1', '0', '0', '1', C, Z, '1'])
+    except KeyError:
+        print('...')
+"""
+
