@@ -1,46 +1,18 @@
 import pickle, gzip, os, numpy as np
-from itertools import product
 from multiprocessing import Pool
 
-from testing import get_test_preds
 from utils import is_verb
 from __config__.filepath import AUX_DIR
 
-# Hyperparameters
-
-prefix = 'multicore'
-thresh = '5'
-dataset = prefix+'-'+thresh
-D = 400  # Number of dimensions for nouns and verbs (separately) 
-seed_range = [32, 8, 91, 64, 97]
-
-right_smooth_range = [0]  # Added to counts of the right type
-all_smooth_range = [0]  # Added to all counts
-a_range = [0.8, 1]  # Power that frequencies are raised to under the null hypothesis
-k_range = [0]  # Negative offset for PMI scores
-
-# Load files
-
-with open(os.path.join(AUX_DIR, '{}-vocab.pkl'.format(dataset)), 'rb') as f:
-    pred_name = pickle.load(f)
-verb = np.array([is_verb(p) for p in pred_name], dtype='bool')
-noun = np.invert(verb)
-
-verb_ones = np.zeros(2*D)
-verb_ones[D:] = 1
-noun_ones = np.zeros(2*D)
-noun_ones[:D] = 1
-smoothing_array = np.outer(verb, verb_ones) + np.outer(noun, noun_ones)
-
-full_template = os.path.join(AUX_DIR, 'simplevec_all', '{}-{}-{}-{}.pkl.gz')
-
-pred_list, _ = get_test_preds(prefix, thresh)
-
-def pmi(obs_vec, a=1, right_smooth=0, all_smooth=0):
+def pmi(obs_vec, D, smoothing_array, noun, verb, a=1, right_smooth=0, all_smooth=0):
     """
     Calculate pointwise mutual information
     (for verbs and nouns separately)
     :param obs_vec: observed numbers of contexts
+    :param D: number of dimensions
+    :param smoothing_array: boolean array of shape [predicates, dimensions] for relevant dimensions 
+    :param noun: boolean array of shape [predicates], true if noun 
+    :param verb: boolean array of shape [predicates], true if verb
     :param a: power to raise frequencies to, for smoothing
     :param right_smooth: value to add to contexts of the right type (noun/verb)
     :param all_smooth: value to add to all contexts
@@ -75,9 +47,39 @@ def pmi(obs_vec, a=1, right_smooth=0, all_smooth=0):
     new += np.log(2)  # To put nouns and verbs in the same space
     
     return new
+    
 
-
-def expand_seed(seed, clip=True):
+def expand_seed(D, seed, k_range=(0,), a_range=(1,), right_smooth_range=(0,), all_smooth_range=(0,), clip=True, prefix='multicore', thresh=5, subdir='simplevec_all'):
+    """
+    Convert raw counts to shifted PMI vectors
+    :param D: number of dimensions
+    :param seed: random seed
+    :param k_range: PMI shifts
+    :param a_range: powers to raise frequencies to
+    :param right_smooth_range: Laplace smoothing values for contexts of the right type
+    :param all_smooth_range: Laplace smoothing values for contexts of the wrong type
+    :param clip: remove negative values
+    :param prefix: dataset prefix
+    :param thresh: threshold
+    :param subdir: directory to save and load models
+    """
+    dataset = '{}-{}'.format(prefix,thresh)
+    
+    # Load files
+    
+    with open(os.path.join(AUX_DIR, '{}-vocab.pkl'.format(dataset)), 'rb') as f:
+        pred_name = pickle.load(f)
+    verb = np.array([is_verb(p) for p in pred_name], dtype='bool')
+    noun = np.invert(verb)
+    
+    verb_ones = np.zeros(2*D)
+    verb_ones[D:] = 1
+    noun_ones = np.zeros(2*D)
+    noun_ones[:D] = 1
+    smoothing_array = np.outer(verb, verb_ones) + np.outer(noun, noun_ones)
+    
+    full_template = os.path.join(AUX_DIR, subdir, '{}-{}-{}-{}.pkl.gz')
+    
     print('seed:', seed)
     
     with gzip.open(full_template.format(dataset, D, 'full', seed), 'rb') as f:
@@ -87,7 +89,7 @@ def expand_seed(seed, clip=True):
     
     for a, right_smooth, all_smooth in product(a_range, right_smooth_range, all_smooth_range):
         print('a, right_smooth, all_smooth:', a, right_smooth, all_smooth)
-        vec = pmi(count_vec, a, right_smooth, all_smooth)
+        vec = pmi(count_vec, D, smoothing_array, noun, verb, a, right_smooth, all_smooth)
     
         # Shift and save
         
@@ -110,5 +112,14 @@ def expand_seed(seed, clip=True):
                 pickle.dump(new, f)
 
 
-with Pool(5) as p:
-    p.map(expand_seed, seed_range)
+if __name__ == "__main__":
+    # Command line options
+    import argparse
+    from itertools import product
+    parser = argparse.ArgumentParser(description="Convert counts to PMI vectors")
+    parser.add_argument('D', type=int)
+    parser.add_argument('seed', nargs='+', type=int)
+    parser.add_argument('--processes', type=int, default=5)
+    args = parser.parse_args()
+    with Pool(args.processes) as p:
+        p.starmap(expand_seed, product([args.D], args.seed))
