@@ -33,7 +33,7 @@ def process(name, directory=SUBDIR, C_index=9):
             # Calculate entity bias
             # We want the average bias for 'correct' dimensions to be 0, as was used in the meanfield approximation
             # Multiply mean by 4, so that it's the mean of noun-verb connections
-            ent_bias = link_wei.mean() * 4 * C + np.log(D/C - 1)
+            ent_bias = link_wei.mean() * 4 * C
             
             # Save parameters
             full_name = name + '-{}-{}'.format(*[str(x).replace('-','~').replace('.','_') for x in (k, scale)])

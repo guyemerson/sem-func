@@ -59,7 +59,7 @@ def load_scoring_fn(filename, option='implies', **kwargs):
             :return: cosine similarity
             """
             # Get verb entities
-            ents = (marg[i][0], marg[j][0])
+            ents = (marg[i], marg[j])
             # Get cosine similarity
             return cosine(*ents)
     
