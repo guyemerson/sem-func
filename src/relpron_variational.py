@@ -191,7 +191,7 @@ def load_scoring_fn(*args, **kwargs):
     Arguments are passed to load_weights_and_vectors
     :return: scoring function
     """
-    return get_scoring_fn(load_weights_and_vectors(*args, **kwargs))
+    return get_scoring_fn(*load_weights_and_vectors(*args, **kwargs))
 
 
 def load_baseline_scoring_fn(*args, **kwargs):
