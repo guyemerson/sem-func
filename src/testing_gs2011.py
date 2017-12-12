@@ -1,4 +1,4 @@
-import os, pickle
+import os, pickle, numpy as np
 
 from testing import get_test_GS2011, get_GS2011_indexed, convert_name, load_freq_lookup_dicts
 from relpron_variational import load_weights_and_vectors
@@ -68,7 +68,37 @@ def load_scoring_fn(filename, option='implies', **kwargs):
     
     return scoring_fn
 
+def load_baseline_scoring_fn(filename, subdir='word2vec', with_lookup=True):
+    "Load a vector addition scoring model"
+    from gensim.models import Word2Vec
+    model = Word2Vec.load(os.path.join(AUX_DIR, subdir, filename))
+    with open(os.path.join(AUX_DIR, 'multicore-5-vocab.pkl'), 'rb') as f:
+        pred_name = pickle.load(f)
+    vec = model.syn0
+    def scoring_fn(i, j):
+        "Add triples and take cosine"
+        # Get tokens
+        v1 = raw_triples[i][0]
+        v2, s, o = raw_triples[j]
+        if with_lookup:
+            v1 = pred_name[lookup['v'][v1]]
+            v2 = pred_name[lookup['v'][v2]]
+            s = pred_name[lookup['n'][s]]
+            o = pred_name[lookup['n'][o]]
+        # Lookup vectors
+        v1, v2, s, o = [vec[model.vocab[x].index] for x in [v1,v2,s,o]]
+        comp1 = v1 + s + o
+        comp2 = v2 + s + o
+        return cosine(comp1, comp2)
+    return scoring_fn
+
 if __name__ == "__main__":
+    vso_model = load_baseline_scoring_fn('model', with_lookup=True)
+    print(test_fn(vso_model))
+    
+    plain_model = load_baseline_scoring_fn('model-plain', with_lookup=False)
+    print(test_fn(plain_model))
+
     for option in ['implies', 'similarity']:
         print(option)
         score_name = 'scores_'+option
@@ -84,7 +114,9 @@ if __name__ == "__main__":
             name = filename.split('.')[0]
             tuple_name = convert_name(name)
             # Load score functions for ensemble
-            # (at the moment, this loads everything)
+            # Skip models we don't want
+            if tuple_name[2] != 400:
+                continue
             score_fn = load_scoring_fn(name, option)
             all_score_fns.append(score_fn)
             all_settings.append(tuple_name)
@@ -92,10 +124,12 @@ if __name__ == "__main__":
             if tuple_name in scores:
                 continue
             # Get rank correlation
+            """
             result = test_fn(score_fn)
             scores[tuple_name] = result
             print(tuple_name)
             print(result)
+            """
         
         def ensemble(i,j):
             "Ensemble score fn"
@@ -105,5 +139,12 @@ if __name__ == "__main__":
         scores[frozenset(all_settings)] = ensemble_score
         print('ensemble')
         print(ensemble_score)
+        
+        for x in np.arange(0.001, 0.0401, 0.001):
+            def combined(i,j):
+                return x * np.log(ensemble(i,j)) + (1-x) * np.log(vso_model(i,j))
+            score = test_fn(combined)
+            print(x, score)
+            scores[frozenset(all_settings), 'vso_word2vec', x] = score
         
         save_scores(scores, filename=score_name)

@@ -29,11 +29,21 @@ def observe_links(filename, input_dir='meanfield_all', output_dir='meanfield_lin
     :param output_dir: directory to save observed link frequencies
     :param C_index: index of cardinality in filename parameters
     """
+    # Skip if it's already been processed
+    output_name = os.path.join(AUX_DIR, output_dir, filename+'-raw.pkl.gz')
+    if os.path.exists(output_name):
+        return
+    
     # Parameters
     
     hyp = filename.split('-')
     D = int(hyp[2])*2
     C = int(hyp[C_index])
+    
+    if hyp[-1] == 'bias':
+        return
+    if D != 2000:
+        return
     
     # Load vectors 
     
@@ -75,14 +85,19 @@ def observe_links(filename, input_dir='meanfield_all', output_dir='meanfield_lin
     
     # Save all parameters to file
     
-    with gzip.open(os.path.join(AUX_DIR, output_dir, filename+'-raw.pkl.gz'), 'wb') as f:
+    with gzip.open(output_name, 'wb') as f:
         pickle.dump(link_freq, f)
 
 if __name__ == "__main__":
     # Command line options
     import argparse
     parser = argparse.ArgumentParser(description="Fit link weights")
-    parser.add_argument('filename')
+    parser.add_argument('filename', nargs='?', default=None)
     args = parser.parse_args()
     
-    observe_links(args.filename, output_dir='meanfield_link')
+    if args.filename:
+        observe_links(args.filename)
+    
+    else:
+        for filename_ext in os.listdir(os.path.join(AUX_DIR, 'meanfield_all')):
+            observe_links(filename_ext.split('.')[0])

@@ -207,6 +207,7 @@ if __name__ == "__main__":
     from testing import get_relpron_separated, get_GS2011_indexed, load_freq_lookup_dicts
     
     LINK_DIR = 'meanfield_link'
+    #OUTPUT_DIR = 'meanfield_relpron'
     OUTPUT_DIR = 'meanfield_gs2011'
     
     # Choose dataset
@@ -255,13 +256,11 @@ if __name__ == "__main__":
         if settings[-1] in ['raw', 'bias']:
             continue
         # Only load the models we want
-        if settings[4] != '1' or \
-           settings[9] != '30' or \
-           settings[13] != '0_5' or \
-           settings[14] != '0_2':
-            continue
-        files.append(name)
-    files_and_shifts = list(product(files, [0.8]))
+        if all([settings[2] == '1000',
+                settings[13] == '0_5',
+                settings[14] == '0_2']):
+            files.append(name)
+    files_and_shifts = list(product(files, [0]))
     shuffle(files_and_shifts)
     
     with Pool(5) as p:

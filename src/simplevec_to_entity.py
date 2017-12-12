@@ -206,29 +206,36 @@ if __name__ == "__main__":
     from multiprocessing import Pool
     from random import shuffle
     
+    # Directories and other decisions
+    
+    INPUT_DIR = 'simplevec_all'
+    OUTPUT_DIR = 'meanfield_all'
+    PRED_LIST = False  # False -> use all, None -> use test preds
+    
     # Grid search over hyperparameters
+    # (see below for constraints on choosing simplevec models)
     
     bias_method = ['frequency']
-    scales = [1]
-    Cs = [30, 40, 50]
+    scales = [1.0]
+    Cs = [75, 100]
     targets = [None]
-    Zs = [0.0001, 0.001, 0.01]
-    alphas = [1]
-    wrong_weights = [1, 4, 16]
+    Zs = [0.01]
+    alphas = [0.8]
+    wrong_weights = [4.0]
     
     grid = product(bias_method, scales, Cs, targets, Zs, alphas, wrong_weights)
     
     # Vector models
     
-    simplevec = os.listdir(os.path.join(AUX_DIR, 'simplevec'))
+    simplevec = os.listdir(os.path.join(AUX_DIR, INPUT_DIR))
     simplevec_filtered = []
     for name in simplevec:
         parts = name.split('-')
         if len(parts) != 8:
             continue
         prefix, thresh, dim, k, a, right_smooth, all_smooth, seed = parts
-        if all([k == '0',
-                right_smooth == '0']):
+        # Constraints on choosing simplevec models
+        if all([dim == '1000']):
             simplevec_filtered.append(name.split('.')[0])
     
     full_grid = list(product(grid, simplevec_filtered))
@@ -236,13 +243,16 @@ if __name__ == "__main__":
     
     def train(hyper, simplevec_name):
         print(hyper, simplevec_name)
+        # Increase Z for low alpha
+        """
         if hyper[5] == 0:
             hyper = list(hyper)
             hyper[4] *= 1000
         elif hyper[5] == 0.6:
             hyper = list(hyper)
             hyper[4] *= 10
-        get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir='meanfield')
+        """
+        get_entities(*hyper, name=simplevec_name, mean_field_kwargs={"max_iter":500}, output_dir=OUTPUT_DIR, input_dir=INPUT_DIR, pred_list=PRED_LIST)
     
     with Pool(16) as p:
         p.starmap(train, full_grid)

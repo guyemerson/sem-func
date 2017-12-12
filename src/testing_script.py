@@ -45,20 +45,26 @@ def test_all_simplevec(vec, **kw):
         return cosine(vec[a], vec[b])
     return test_all(sim, **kw)
 
-def test_all_implies(vec, sf, op=None, **kw):
+def test_all_implies(vec, sf, op=None, ensemble=False, **kw):
     """
     Test semfunc model on all datasets
     :param vec: mean field posterior vectors
     :param sf: semantic functions
     :param op: how to combine the implications
+    :param ensemble: combine predictions from several models
     :param **kw: additional keyword arguments passed to test_all function
     :return: Spearman rank correlation results
     """
     if op is None:
         op = operator.add
-    def sim(a,b):
-        "Combined truth of a=>b and b=>a"
-        return op(sf[a](vec[b]), sf[b](vec[a]))
+    if ensemble:
+        def sim(a,b):
+            "Combined truth of a=>b and b=>a, averaged across several models"
+            return sum(op(f[a](v[b]), f[b](v[a])) for v,f in zip(vec,sf))
+    else:
+        def sim(a,b):
+            "Combined truth of a=>b and b=>a"
+            return op(sf[a](vec[b]), sf[b](vec[a]))
     return test_all(sim, **kw)
 
 def test_hypernym(vec, sf, **kw):
@@ -134,6 +140,23 @@ def add_simple_scores(scores, subdir='simplevec', length=7, pred_list=pred_list,
         # Test
         scores[settings] = test_fn(vectors, **test_fn_kwargs)
 
+def load_semfunc_model(name, param_subdir, meanfield_subdir, basic_length, full_length, C_index):
+    "Load a semfunc model"
+    settings = tuple(name.split('-'))
+    basic_name = '-'.join(settings[:basic_length])
+    C = int(settings[C_index])
+    # Load the semantic functions
+    with gzip.open(os.path.join(AUX_DIR, param_subdir, basic_name+'.pkl.gz'), 'rb') as f:
+        param_vec = pickle.load(f)
+    with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, name+'-bias.pkl.gz'), 'rb') as f:
+        bias = pickle.load(f)
+    semfuncs = {i:get_semfunc(param_vec[i], bias[i]) for i in pred_list}
+    # Load the entity vectors
+    with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, name+'.pkl.gz'), 'rb') as f:
+        meanfield_vec = pickle.load(f)
+    marginal_vec = {i: marginal_approx(meanfield_vec[i], C) for i in pred_list}
+    return marginal_vec, semfuncs
+
 def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanfield_freq', basic_length=7, full_length=11, C_index=8, pred_list=pred_list, constr=(), test_fn=test_all_implies, **test_fn_kwargs):
     "Add new scores"
     # Process each file
@@ -155,8 +178,7 @@ def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanf
         if any(settings[pos] not in [str(x).replace('.','') for x in val] for pos,val in constr):
             continue
         # Extract information from filename
-        basic_settings = settings[:basic_length]
-        basic_name = '-'.join(basic_settings)
+        basic_name = '-'.join(settings[:basic_length])
         C = int(settings[C_index])
         # Load the parameter vectors
         print(filename)
@@ -168,11 +190,11 @@ def add_semfunc_scores(scores, param_subdir='simplevec', meanfield_subdir='meanf
         with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, name+'-bias.pkl.gz'), 'rb') as f:
             bias = pickle.load(f)
         # Construct the semantic functions
-        semfuncs = {i:get_semfunc(param_vec[i], bias[i]) for i in bias}
+        semfuncs = {i:get_semfunc(param_vec[i], bias[i]) for i in pred_list}
         # Load the entity vectors
         with gzip.open(os.path.join(AUX_DIR, meanfield_subdir, filename), 'rb') as f:
             meanfield_vec = pickle.load(f)
-        marginal_vec = {i: marginal_approx(p, C) for i,p in meanfield_vec.items()}
+        marginal_vec = {i: marginal_approx(meanfield_vec[i], C) for i in pred_list}
         # Test
         scores[settings] = test_fn(marginal_vec, semfuncs, **test_fn_kwargs)
 
@@ -202,22 +224,25 @@ def get_av_scores(scores, index=7):
         av_scores[s] = (len(arrs), np.array(arrs).mean(0))
     return av_scores
 
-def get_max(av_scores, pos, constr=()):
+def get_max(av_scores, pos, constr=(), neg_pos=(), min_seeds=2):
     """
     Get maximum score from all hyperparameter settings
     :param scores: dict mapping settings tuples to score tuples
     :param pos: position(s) out of tuple of scores to maximise (int or list/tuple of ints)
     :param constr: iterable of (index, value) pairs to constrain hyperparameters
+    :param neg_pos: positions to minimise (list/tuple of ints)
     :return: best set of hyperparameters, and its scores
     """
     def key(s):
         "Give average score of considered positions, and only if constraints are satisfied"
         if any(s[i] != v for i,v in constr):
             return 0
+        elif av_scores[s][0] < min_seeds:
+            return 0
         elif pos is None:
             return av_scores[s][1]
         elif isinstance(pos, (list, tuple)):
-            return sum(av_scores[s][1][p] for p in pos)
+            return sum(av_scores[s][1][p] for p in pos) - sum(av_scores[s][1][p] for p in neg_pos)
         else:
             return av_scores[s][1][pos]
     # Get the best hyperparameters
@@ -288,36 +313,6 @@ for op_name, op in [('add', operator.add),
     print(get_max(av_scores, [0,1,2,4]))
 """
 
-#subdir = '/local/scratch/gete2/variational/meanfield_freq'
-#semfunc_subdir = '/local/scratch/gete2/variational/simplevec'
-#basic_length=6
-#subdir = 'meanfield_freq_card'
-#semfunc_subdir = 'simplevec_card'
-#basic_length = 7
-
-meanfield_subdir = 'meanfield'
-basic_length = 8
-kwargs = {
-    'param_subdir': 'simplevec',
-    'meanfield_subdir': meanfield_subdir,
-    'basic_length': basic_length,
-    'full_length': 13,
-    'C_index': 9
-}
-"""
-meanfield_subdir = '/local/scratch/gete2/variational/meanfield_freq'
-basic_length = 6
-kwargs = {
-    'param_subdir': '/local/scratch/gete2/variational/simplevec',
-    'meanfield_subdir': meanfield_subdir,
-    'basic_length': basic_length,
-    'full_length': 10,
-    'C_index': 7
-}
-"""
-#meanfield_subdir = 'meanfield_freq'
-#basic_length = 7
-#full_length = 11
 """
 for op_name, op in [('mul', operator.mul),
                     ('add', operator.add),
@@ -338,17 +333,70 @@ for op_name, op in [('mul', operator.mul),
 
 
 """
-scores = get_scores(meanfield_subdir, 'scores_mul')
-add_semfunc_scores(scores, op=operator.mul, **kwargs)
-save_scores(scores, meanfield_subdir, 'scores_mul')
-_scores = get_av_scores(scores, 0)
-for x in ['8','32','64','91','97']:
-    for i in [0,1,2,4,5]:
-        print(get_max(_scores, i, [(6, x)]))
-    print(get_max(_scores, [0,2,4,5], [(6, x)]))
-    print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01')]))
-    print(get_max(_scores, [0,2,4,5], [(6, x), (11, '4')]))
-    print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01'), (11, '4')]))
+
+
+if __name__ == "__main__":
+    # Settings
+    meanfield_subdir = 'meanfield_all'
+    basic_length = 8
+    kwargs = {
+        'param_subdir': 'simplevec_all',
+        'meanfield_subdir': meanfield_subdir,
+        'basic_length': basic_length,
+        'full_length': 13,
+        'C_index': 9
+    }
+    # Add new scores
+    scores = get_scores(meanfield_subdir, 'scores_mul')
+    add_semfunc_scores(scores, op=operator.mul, **kwargs)
+    save_scores(scores, meanfield_subdir, 'scores_mul')
+    # Find best settings for each seed
+    """
+    _scores = get_av_scores(scores, 0)  # Keep runs separate, but format as get_max expects
+    for x in ['8','32','64','91','97']:
+        for i in [0,1,2,4,5]:
+            print(get_max(_scores, i, [(6, x)]))
+        print(get_max(_scores, [0,2,4,5], [(6, x)]))
+        print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01')]))
+        print(get_max(_scores, [0,2,4,5], [(6, x), (11, '4')]))
+        print(get_max(_scores, [0,2,4,5], [(6, x), (9, '0_01'), (11, '4')]))
+    """
+    
+    # Get performance when tuning on other datasets
+    datasets = [(0, [1,2,4,5], [3], [(2, '400')]),
+                (1, [0,2,4], [3], [(2, '1000')]), # SimVerb and SimLex overlap
+                (2, [0,1,4,5], [], [(2, '400')]), # WordSim subsets overlap
+                (3, [0,1,4,5], [], [(2, '400')]), # WordSim subsets overlap
+                (4, [0,1,2,5], [3], [(2, '400')]),
+                (5, [0,2,4], [3], [(2, '1000')])] # SimVerb and SimLex overlap
+    
+    av_scores = get_av_scores(scores)
+    for testset, devsets, negsets, constr in datasets[-1:]:
+        best_settings, (result) = get_max(av_scores, devsets, constr, negsets)
+        print(best_settings)
+        print(result)
+        print(av_scores[best_settings][1][testset])
+        i = basic_length - 1 
+        template = '-'.join(best_settings[:i])+'-{}-'+'-'.join(best_settings[i:])
+        names = [template.format(x) for x in [8,32,64,91,97]]
+        marg_vecs, semfuncs = zip(*(load_semfunc_model(n, **kwargs) for n in names)) 
+        test_all_implies(marg_vecs, semfuncs, operator.mul, True)
+
+if False:
+    # Add new scores for predicting hypernyms
+    scores = get_scores(meanfield_subdir, 'scores_hyper_reverse')
+    add_semfunc_scores(scores, test_fn=test_hypernym_reverse, **kwargs)
+    save_scores(scores, meanfield_subdir, 'scores_hyper_reverse')
+    # Find best settings for each seed
+    _scores = get_av_scores(scores, 0)
+    for x in ['8','32','64','91','97']:
+        print(get_max(_scores, None, [(6, x)]))
+    
+    # Add new probabilities of each predicate being true of its own meanfield entity
+    self_prob = get_scores(meanfield_subdir, 'self_prob')
+    add_semfunc_scores(self_prob, test_fn=implies_self, **kwargs)
+    save_scores(self_prob, meanfield_subdir, 'self_prob')
+    av_self_prob = get_av_scores(self_prob)
 
 """
 scores = get_scores(meanfield_subdir, 'scores_hyper')
@@ -358,17 +406,6 @@ _scores = get_av_scores(scores, 0)
 for x in ['8','32','64','91','97']:
     print(get_max(_scores, None, [(6, x)]))
 """
-scores = get_scores(meanfield_subdir, 'scores_hyper_reverse')
-add_semfunc_scores(scores, test_fn=test_hypernym_reverse, **kwargs)
-save_scores(scores, meanfield_subdir, 'scores_hyper_reverse')
-_scores = get_av_scores(scores, 0)
-for x in ['8','32','64','91','97']:
-    print(get_max(_scores, None, [(6, x)]))
-
-self_prob = get_scores(meanfield_subdir, 'self_prob')
-add_semfunc_scores(self_prob, test_fn=implies_self, **kwargs)
-save_scores(self_prob, meanfield_subdir, 'self_prob')
-av_self_prob = get_av_scores(self_prob)
 
 """
 av_scores = get_av_scores(scores, basic_length-1)

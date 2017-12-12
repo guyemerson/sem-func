@@ -2,8 +2,8 @@ import os, pickle, gzip, numpy as np
 
 from __config__.filepath import AUX_DIR
 
-k_range = [0.5, 0.8]
-scale_range = [0.1, 0.2]
+k_range = [0.3, 0.5, 0.7]
+scale_range = [0.15, 0.2, 0.25]
 
 SUBDIR = 'meanfield_link'
 
@@ -55,8 +55,10 @@ if __name__ == '__main__':
     for filename in os.listdir(os.path.join(AUX_DIR, SUBDIR)):
         rawname = filename.split('.')[0]
         name, last = rawname.rsplit('-', 1)
-        if last == 'raw':
+        settings = name.split('-')
+        if all([last == 'raw',
+                settings[2] == '1000']):
             files.append(name)
     
-    with Pool(4) as p:
+    with Pool(5) as p:
         p.map(process, files)

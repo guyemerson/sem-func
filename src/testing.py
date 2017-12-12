@@ -112,13 +112,19 @@ def get_men():
     noun_scores = np.array(noun_scores)
     return (noun_pairs, noun_scores)
 
-def get_simverb():
+def get_simverb(subset=None):
     """
     Get SimVerb-3500 data
     :return: (pairs, scores)
     """
     simverb = []
-    with open('../data/SimVerb-3500/SimVerb-3500.txt') as f:
+    if subset == 'dev':
+        name = '500-dev'
+    elif subset == 'test':
+        name = '3000-test'
+    else:
+        name = '3500'
+    with open('../data/SimVerb-3500/SimVerb-{}.txt'.format(name)) as f:
         f.readline()  # first line is headings
         for line in f:
             simverb.append(line.strip().split('\t'))
@@ -698,7 +704,7 @@ def get_test_relpron_ensemble(prefix='multicore', thresh=5, testset=False):
         return mean_av_prec
     return test
 
-def get_test_GS2011(prefix='multicore', thresh=5, indices_only=True):
+def get_test_GS2011(prefix='multicore', thresh=5, indices_only=True, with_lookup=True):
     """
     Get a testing function for a specific pred lookup
     :param prefix: name of dataset
@@ -708,9 +714,13 @@ def get_test_GS2011(prefix='multicore', thresh=5, indices_only=True):
     if indices_only:
         _, data = get_GS2011_indexed()
     else:
-        data = get_GS2011()[:2]
-        freq_lookup = load_freq_lookup_dicts(prefix, thresh)
-        raise Exception('Not implemented')
+        raw_pairs, scores = get_GS2011()[:2]
+        if with_lookup:
+            lup = load_freq_lookup_dicts(prefix, thresh)
+            pairs = [[(lup['v'][v], lup['n'][s], lup['n'][o]) for v,s,o in pair] for pair in raw_pairs]
+            data = (pairs, scores)
+        else:
+            data = (raw_pairs, scores)
 
     def test(score_fn, **kwargs):
         """
